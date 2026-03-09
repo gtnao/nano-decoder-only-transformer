@@ -8,6 +8,7 @@ pub mod multi_head_attention;
 pub mod positional_encoding;
 pub mod softmax;
 pub mod tensor;
+pub mod transformer_block;
 
 fn main() {
     println!("Hello, world!");
