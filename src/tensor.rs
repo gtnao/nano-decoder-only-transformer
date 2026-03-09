@@ -84,22 +84,23 @@ impl Tensor {
         Tensor::new(data, vec![cols, rows])
     }
 
-    // 2D matrix multiplication
+    // 2D matrix multiplication (optimized via matrixmultiply crate)
     pub fn matmul(&self, other: &Tensor) -> Tensor {
         assert_eq!(self.shape.len(), 2, "matmul requires 2D tensor");
         assert_eq!(other.shape.len(), 2, "matmul requires 2D tensor");
         let (m, k1) = (self.shape[0], self.shape[1]);
         let (k2, n) = (other.shape[0], other.shape[1]);
         assert_eq!(k1, k2, "matmul inner dimensions mismatch: {} vs {}", k1, k2);
-        let mut data = vec![0.0; m * n];
-        for i in 0..m {
-            for j in 0..n {
-                let mut sum = 0.0;
-                for k in 0..k1 {
-                    sum += self.data[i * k1 + k] * other.data[k * n + j];
-                }
-                data[i * n + j] = sum;
-            }
+        let mut data = vec![0.0_f32; m * n];
+        unsafe {
+            matrixmultiply::sgemm(
+                m, k1, n,
+                1.0,
+                self.data.as_ptr(), k1 as isize, 1,
+                other.data.as_ptr(), n as isize, 1,
+                0.0,
+                data.as_mut_ptr(), n as isize, 1,
+            );
         }
         Tensor::new(data, vec![m, n])
     }
