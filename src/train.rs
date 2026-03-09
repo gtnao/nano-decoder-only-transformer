@@ -70,14 +70,32 @@ pub fn train(
     let mut adam = Adam::new(lr, &model.param_sizes());
     let mut losses = Vec::new();
     let mut step = 0;
+    let steps_per_epoch = data.len();
 
-    for _epoch in 0..epochs {
+    let train_start = std::time::Instant::now();
+    eprintln!("Training: {} epochs x {} steps/epoch = {} total steps", epochs, steps_per_epoch, total_steps);
+
+    for epoch in 0..epochs {
+        let mut epoch_loss = 0.0;
         for (input, target) in &data {
             adam.set_lr(schedule.get_lr(step));
             let loss = train_step(model, &mut adam, input, target, max_grad_norm);
+            epoch_loss += loss;
             losses.push(loss);
             step += 1;
+
+            let elapsed = train_start.elapsed().as_secs_f64();
+            let per_step = elapsed / step as f64;
+            let eta = per_step * (total_steps - step) as f64;
+            eprintln!(
+                "  step {}/{} (epoch {}/{}) loss={:.4} lr={:.6} [{:.1}s elapsed, ETA {:.0}s]",
+                step, total_steps, epoch + 1, epochs,
+                loss, schedule.get_lr(step.saturating_sub(1)),
+                elapsed, eta
+            );
         }
+        let avg_loss = epoch_loss / steps_per_epoch as f32;
+        eprintln!("Epoch {}/{}: avg_loss={:.4}", epoch + 1, epochs, avg_loss);
     }
 
     losses
