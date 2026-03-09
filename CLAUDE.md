@@ -6,19 +6,32 @@ Rust でフレームワークなし（rand のみ）で Decoder-Only Transformer
 
 1. [x] Tensor基盤 — Tensor構造体, add, mul, transpose, matmul
 2. [x] Linear層 — y = x @ W^T + b
-3. [ ] 活性化関数 — ReLU, GELU
-4. [ ] Softmax
-5. [ ] Layer Normalization
-6. [ ] Embedding
-7. [ ] Positional Encoding
-8. [ ] Scaled Dot-Product Attention + Causal Mask
-9. [ ] Multi-Head Attention
-10. [ ] Feed-Forward Network
-11. [ ] Transformer Block — LayerNorm → MHA → 残差接続 → LayerNorm → FFN → 残差接続
-12. [ ] Transformer全体 — Embedding → N × Block → LayerNorm → 出力Linear
-13. [ ] トークナイザ（簡易版）
-14. [ ] 推論ループ
-15. [ ] 学習ループ — Cross Entropy Loss, 逆伝播, パラメータ更新
+3. [x] 活性化関数 — ReLU, GELU
+4. [x] Softmax
+5. [x] Layer Normalization
+6. [x] Embedding
+7. [x] Positional Encoding
+8. [x] Scaled Dot-Product Attention + Causal Mask
+9. [x] Multi-Head Attention
+10. [x] Feed-Forward Network
+11. [x] Transformer Block — LayerNorm → MHA → 残差接続 → LayerNorm → FFN → 残差接続
+12. [x] Transformer全体 — Embedding → N × Block → LayerNorm → 出力Linear
+13. [x] トークナイザ（簡易版）
+14. [x] 推論ループ
+15. [x] Cross Entropy Loss
+16. [x] 逆伝播の基盤 — 勾配テンソル、連鎖律の仕組み
+17. [x] Linear の backward
+18. [x] 活性化関数の backward — ReLU, GELU
+19. [x] Softmax の backward
+20. [x] Layer Normalization の backward
+21. [x] Embedding の backward
+22. [x] Attention の backward
+23. [x] Multi-Head Attention の backward
+24. [x] Feed-Forward Network の backward
+25. [x] Transformer Block の backward
+26. [x] Transformer 全体の backward
+27. [x] パラメータ更新 — SGD or Adam
+28. [x] 学習ループ — データ準備、ミニバッチ、エポック
 
 ## 各ステップの進め方（必ずこの順序で行う）
 
