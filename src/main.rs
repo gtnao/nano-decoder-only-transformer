@@ -1,5 +1,6 @@
 pub mod activation;
 pub mod attention;
+pub mod dropout;
 pub mod embedding;
 pub mod feed_forward;
 pub mod generate;

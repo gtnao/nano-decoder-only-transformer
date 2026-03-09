@@ -81,9 +81,20 @@ impl Transformer {
         d_ff: usize,
         n_layers: usize,
     ) -> Self {
+        Self::rand_with_dropout(vocab_size, d_model, n_heads, d_ff, n_layers, 0.0)
+    }
+
+    pub fn rand_with_dropout(
+        vocab_size: usize,
+        d_model: usize,
+        n_heads: usize,
+        d_ff: usize,
+        n_layers: usize,
+        dropout_rate: f32,
+    ) -> Self {
         let token_embedding = Embedding::rand(vocab_size, d_model);
         let blocks = (0..n_layers)
-            .map(|_| TransformerBlock::rand(d_model, n_heads, d_ff))
+            .map(|_| TransformerBlock::rand_with_dropout(d_model, n_heads, d_ff, dropout_rate))
             .collect();
         let ln_final = LayerNorm::new(d_model);
         let lm_head = Linear::rand(d_model, vocab_size);
@@ -97,6 +108,11 @@ impl Transformer {
 
     /// token_ids: &[usize] -> logits: Tensor [seq_len, vocab_size]
     pub fn forward(&self, token_ids: &[usize]) -> Tensor {
+        self.forward_with_training(token_ids, false)
+    }
+
+    /// Forward with explicit training flag (enables dropout).
+    pub fn forward_with_training(&self, token_ids: &[usize], training: bool) -> Tensor {
         let seq_len = token_ids.len();
         let d_model = self.token_embedding.weight.shape[1];
 
@@ -107,7 +123,7 @@ impl Transformer {
 
         // N transformer blocks
         for block in &self.blocks {
-            x = block.forward(&x);
+            x = block.forward(&x, training);
         }
 
         // Final layer norm + projection to vocab
@@ -127,12 +143,13 @@ impl Transformer {
         let pos_enc = positional_encoding(seq_len, d_model);
         let x0 = tok_emb.add(&pos_enc);
 
-        // Store input to each block
+        // Store input to each block (recompute without dropout;
+        // dropout masks are cached in blocks and applied in backward)
         let mut block_inputs = Vec::with_capacity(self.blocks.len());
         let mut x = x0.clone();
         for block in &self.blocks {
             block_inputs.push(x.clone());
-            x = block.forward(&x);
+            x = block.forward(&x, false);
         }
         let x_before_ln = x;
         let x_after_ln = self.ln_final.forward(&x_before_ln);

@@ -27,8 +27,8 @@ pub fn train_step(
     target: &[usize],
     max_grad_norm: f32,
 ) -> f32 {
-    // Forward
-    let logits = model.forward(input);
+    // Forward (with dropout enabled)
+    let logits = model.forward_with_training(input, true);
 
     // Loss
     let loss = cross_entropy_loss(&logits, target);
