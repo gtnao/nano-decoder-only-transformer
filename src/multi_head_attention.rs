@@ -1,6 +1,7 @@
 use crate::attention::{causal_mask, scaled_dot_product_attention, scaled_dot_product_attention_backward};
 use crate::linear::Linear;
 use crate::tensor::Tensor;
+use rayon::prelude::*;
 
 pub struct MHAGradients {
     pub d_x: Tensor,
@@ -59,36 +60,31 @@ impl MultiHeadAttention {
             None
         };
 
-        // Split heads, apply attention, collect results
-        let mut head_outputs = vec![0.0_f32; seq_len * d_model];
-
-        for h in 0..self.n_heads {
-            let offset = h * d_k;
-
-            // Extract head h: [seq_len, d_k]
-            let mut q_h = vec![0.0_f32; seq_len * d_k];
-            let mut k_h = vec![0.0_f32; seq_len * d_k];
-            let mut v_h = vec![0.0_f32; seq_len * d_k];
-            for s in 0..seq_len {
-                for d in 0..d_k {
-                    q_h[s * d_k + d] = q_full.data[s * d_model + offset + d];
-                    k_h[s * d_k + d] = k_full.data[s * d_model + offset + d];
-                    v_h[s * d_k + d] = v_full.data[s * d_model + offset + d];
+        // Split heads, apply attention in parallel, collect results
+        let head_results: Vec<(usize, Tensor)> = (0..self.n_heads)
+            .into_par_iter()
+            .map(|h| {
+                let offset = h * d_k;
+                let mut q_h = vec![0.0_f32; seq_len * d_k];
+                let mut k_h = vec![0.0_f32; seq_len * d_k];
+                let mut v_h = vec![0.0_f32; seq_len * d_k];
+                for s in 0..seq_len {
+                    for d in 0..d_k {
+                        q_h[s * d_k + d] = q_full.data[s * d_model + offset + d];
+                        k_h[s * d_k + d] = k_full.data[s * d_model + offset + d];
+                        v_h[s * d_k + d] = v_full.data[s * d_model + offset + d];
+                    }
                 }
-            }
+                let q_head = Tensor::new(q_h, vec![seq_len, d_k]);
+                let k_head = Tensor::new(k_h, vec![seq_len, d_k]);
+                let v_head = Tensor::new(v_h, vec![seq_len, d_k]);
+                let attn_out = scaled_dot_product_attention(&q_head, &k_head, &v_head, mask.as_ref());
+                (offset, attn_out)
+            })
+            .collect();
 
-            let q_head = Tensor::new(q_h, vec![seq_len, d_k]);
-            let k_head = Tensor::new(k_h, vec![seq_len, d_k]);
-            let v_head = Tensor::new(v_h, vec![seq_len, d_k]);
-
-            let attn_out = scaled_dot_product_attention(
-                &q_head,
-                &k_head,
-                &v_head,
-                mask.as_ref(),
-            );
-
-            // Write back into concatenated output
+        let mut head_outputs = vec![0.0_f32; seq_len * d_model];
+        for (offset, attn_out) in &head_results {
             for s in 0..seq_len {
                 for d in 0..d_k {
                     head_outputs[s * d_model + offset + d] = attn_out.data[s * d_k + d];
@@ -121,24 +117,31 @@ impl MultiHeadAttention {
             None
         };
 
-        // Recompute per-head attention outputs and collect concat
-        let mut head_outputs = vec![0.0_f32; seq_len * d_model];
-        for h in 0..self.n_heads {
-            let offset = h * d_k;
-            let mut q_h = vec![0.0_f32; seq_len * d_k];
-            let mut k_h = vec![0.0_f32; seq_len * d_k];
-            let mut v_h = vec![0.0_f32; seq_len * d_k];
-            for s in 0..seq_len {
-                for d in 0..d_k {
-                    q_h[s * d_k + d] = q_full.data[s * d_model + offset + d];
-                    k_h[s * d_k + d] = k_full.data[s * d_model + offset + d];
-                    v_h[s * d_k + d] = v_full.data[s * d_model + offset + d];
+        // Recompute per-head attention outputs in parallel
+        let head_results: Vec<(usize, Tensor)> = (0..self.n_heads)
+            .into_par_iter()
+            .map(|h| {
+                let offset = h * d_k;
+                let mut q_h = vec![0.0_f32; seq_len * d_k];
+                let mut k_h = vec![0.0_f32; seq_len * d_k];
+                let mut v_h = vec![0.0_f32; seq_len * d_k];
+                for s in 0..seq_len {
+                    for d in 0..d_k {
+                        q_h[s * d_k + d] = q_full.data[s * d_model + offset + d];
+                        k_h[s * d_k + d] = k_full.data[s * d_model + offset + d];
+                        v_h[s * d_k + d] = v_full.data[s * d_model + offset + d];
+                    }
                 }
-            }
-            let q_head = Tensor::new(q_h, vec![seq_len, d_k]);
-            let k_head = Tensor::new(k_h, vec![seq_len, d_k]);
-            let v_head = Tensor::new(v_h, vec![seq_len, d_k]);
-            let attn_out = scaled_dot_product_attention(&q_head, &k_head, &v_head, mask.as_ref());
+                let q_head = Tensor::new(q_h, vec![seq_len, d_k]);
+                let k_head = Tensor::new(k_h, vec![seq_len, d_k]);
+                let v_head = Tensor::new(v_h, vec![seq_len, d_k]);
+                let attn_out = scaled_dot_product_attention(&q_head, &k_head, &v_head, mask.as_ref());
+                (offset, attn_out)
+            })
+            .collect();
+
+        let mut head_outputs = vec![0.0_f32; seq_len * d_model];
+        for (offset, attn_out) in &head_results {
             for s in 0..seq_len {
                 for d in 0..d_k {
                     head_outputs[s * d_model + offset + d] = attn_out.data[s * d_k + d];
@@ -150,38 +153,38 @@ impl MultiHeadAttention {
         // Backward through Wo
         let (d_concat, d_wo_weight, d_wo_bias) = self.wo.backward(d_output, &concat);
 
-        // Backward through heads: split d_concat, run attention backward
+        // Backward through heads in parallel
+        let head_grads: Vec<(usize, Tensor, Tensor, Tensor)> = (0..self.n_heads)
+            .into_par_iter()
+            .map(|h| {
+                let offset = h * d_k;
+                let mut d_out_h = vec![0.0_f32; seq_len * d_k];
+                let mut q_h = vec![0.0_f32; seq_len * d_k];
+                let mut k_h = vec![0.0_f32; seq_len * d_k];
+                let mut v_h = vec![0.0_f32; seq_len * d_k];
+                for s in 0..seq_len {
+                    for d in 0..d_k {
+                        d_out_h[s * d_k + d] = d_concat.data[s * d_model + offset + d];
+                        q_h[s * d_k + d] = q_full.data[s * d_model + offset + d];
+                        k_h[s * d_k + d] = k_full.data[s * d_model + offset + d];
+                        v_h[s * d_k + d] = v_full.data[s * d_model + offset + d];
+                    }
+                }
+                let d_out_head = Tensor::new(d_out_h, vec![seq_len, d_k]);
+                let q_head = Tensor::new(q_h, vec![seq_len, d_k]);
+                let k_head = Tensor::new(k_h, vec![seq_len, d_k]);
+                let v_head = Tensor::new(v_h, vec![seq_len, d_k]);
+                let (d_qh, d_kh, d_vh) = scaled_dot_product_attention_backward(
+                    &d_out_head, &q_head, &k_head, &v_head, mask.as_ref(),
+                );
+                (offset, d_qh, d_kh, d_vh)
+            })
+            .collect();
+
         let mut d_q_full = vec![0.0_f32; seq_len * d_model];
         let mut d_k_full = vec![0.0_f32; seq_len * d_model];
         let mut d_v_full = vec![0.0_f32; seq_len * d_model];
-
-        for h in 0..self.n_heads {
-            let offset = h * d_k;
-
-            // Extract head slices for d_concat, q, k, v
-            let mut d_out_h = vec![0.0_f32; seq_len * d_k];
-            let mut q_h = vec![0.0_f32; seq_len * d_k];
-            let mut k_h = vec![0.0_f32; seq_len * d_k];
-            let mut v_h = vec![0.0_f32; seq_len * d_k];
-            for s in 0..seq_len {
-                for d in 0..d_k {
-                    d_out_h[s * d_k + d] = d_concat.data[s * d_model + offset + d];
-                    q_h[s * d_k + d] = q_full.data[s * d_model + offset + d];
-                    k_h[s * d_k + d] = k_full.data[s * d_model + offset + d];
-                    v_h[s * d_k + d] = v_full.data[s * d_model + offset + d];
-                }
-            }
-
-            let d_out_head = Tensor::new(d_out_h, vec![seq_len, d_k]);
-            let q_head = Tensor::new(q_h, vec![seq_len, d_k]);
-            let k_head = Tensor::new(k_h, vec![seq_len, d_k]);
-            let v_head = Tensor::new(v_h, vec![seq_len, d_k]);
-
-            let (d_qh, d_kh, d_vh) = scaled_dot_product_attention_backward(
-                &d_out_head, &q_head, &k_head, &v_head, mask.as_ref(),
-            );
-
-            // Scatter back into full gradient tensors
+        for (offset, d_qh, d_kh, d_vh) in &head_grads {
             for s in 0..seq_len {
                 for d in 0..d_k {
                     d_q_full[s * d_model + offset + d] = d_qh.data[s * d_k + d];

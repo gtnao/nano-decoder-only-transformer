@@ -1,6 +1,6 @@
 # Nano Decoder-Only Transformer
 
-Rust でフレームワークなし（rand のみ）で Decoder-Only Transformer をゼロから実装する学習プロジェクト。
+Rust で Decoder-Only Transformer をゼロから実装する学習プロジェクト。
 
 ## 実装ステップ
 
@@ -36,6 +36,10 @@ Rust でフレームワークなし（rand のみ）で Decoder-Only Transformer
 30. [x] 学習率スケジューリング — linear warmup + cosine decay
 31. [x] Dropout
 32. [x] 日本語コーパスでの学習デモ
+33. [x] 行列積の高速化 — matrixmultiply クレート（~15x高速化）
+34. [x] マルチコア並列化 — rayon による Attention head 並列処理
+35. [x] メモリ確保の削減 — in-place 演算、不要な clone 削除
+36. [x] SIMD 自動ベクトル化 — target-cpu=native
 
 ## 各ステップの進め方（必ずこの順序で行う）
 
@@ -51,6 +55,6 @@ Rust でフレームワークなし（rand のみ）で Decoder-Only Transformer
 ## 開発方針
 
 - TDD: テスト（と必要な構造体・シグネチャ）を先に書き、実装は後から埋める
-- 外部crateは `rand` のみ。行列演算含め全て自前実装
+- 外部crate: `rand`, `matrixmultiply`, `rayon`
 - コード内コメントは英語
 - ユーザーへの応答は日本語

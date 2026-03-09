@@ -71,6 +71,27 @@ impl Tensor {
         Tensor::new(data, self.shape.clone())
     }
 
+    // In-place element-wise addition (avoids allocation)
+    pub fn add_inplace(&mut self, other: &Tensor) {
+        assert_eq!(self.shape, other.shape, "shape mismatch for add_inplace");
+        for (a, b) in self.data.iter_mut().zip(other.data.iter()) {
+            *a += b;
+        }
+    }
+
+    // Scalar multiplication in-place
+    pub fn scale_inplace(&mut self, s: f32) {
+        for v in self.data.iter_mut() {
+            *v *= s;
+        }
+    }
+
+    // Scalar multiplication (returns new Tensor)
+    pub fn scale(&self, s: f32) -> Tensor {
+        let data = self.data.iter().map(|v| v * s).collect();
+        Tensor::new(data, self.shape.clone())
+    }
+
     // 2D transpose
     pub fn transpose(&self) -> Tensor {
         assert_eq!(self.shape.len(), 2, "transpose requires 2D tensor");

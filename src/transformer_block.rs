@@ -107,19 +107,21 @@ impl TransformerBlock {
         let normed2 = self.ln2.forward(&x1);
 
         // --- Second residual: output = x1 + dropout(ffn(ln2(x1))) ---
-        let mut d_ffn_out = d_output.clone();
-        if let Some((_, ref mask2)) = masks {
-            d_ffn_out = dropout_backward(&d_ffn_out, mask2, self.dropout_rate);
-        }
+        let d_ffn_out = if let Some((_, ref mask2)) = masks {
+            dropout_backward(d_output, mask2, self.dropout_rate)
+        } else {
+            d_output.clone()
+        };
         let ffn_grads = self.ffn.backward(&d_ffn_out, &normed2);
         let (d_x1_from_ln2, d_ln2_gamma, d_ln2_beta) = self.ln2.backward(&ffn_grads.d_x, &x1);
         let d_x1 = d_output.add(&d_x1_from_ln2);
 
         // --- First residual: x1 = x + dropout(mha(ln1(x))) ---
-        let mut d_attn_out = d_x1.clone();
-        if let Some((ref mask1, _)) = masks {
-            d_attn_out = dropout_backward(&d_attn_out, mask1, self.dropout_rate);
-        }
+        let d_attn_out = if let Some((ref mask1, _)) = masks {
+            dropout_backward(&d_x1, mask1, self.dropout_rate)
+        } else {
+            d_x1.clone()
+        };
         let mha_grads = self.mha.backward(&d_attn_out, &normed1, true);
         let (d_x_from_ln1, d_ln1_gamma, d_ln1_beta) = self.ln1.backward(&mha_grads.d_x, x);
         let d_x = d_x1.add(&d_x_from_ln1);

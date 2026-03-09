@@ -14,11 +14,17 @@ pub fn softmax(x: &Tensor) -> Tensor {
 
         // subtract max for numerical stability
         let max_val = group.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let exps: Vec<f32> = group.iter().map(|&v| (v - max_val).exp()).collect();
-        let sum: f32 = exps.iter().sum();
-
-        for (i, &e) in exps.iter().enumerate() {
-            data[start + i] = e / sum;
+        // Write exp values directly into output, then normalize in-place
+        let out = &mut data[start..end];
+        let mut sum = 0.0_f32;
+        for (i, &v) in group.iter().enumerate() {
+            let e = (v - max_val).exp();
+            out[i] = e;
+            sum += e;
+        }
+        let inv_sum = 1.0 / sum;
+        for v in out.iter_mut() {
+            *v *= inv_sum;
         }
     }
 

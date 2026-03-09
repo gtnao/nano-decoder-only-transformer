@@ -38,9 +38,9 @@ pub fn scaled_dot_product_attention(
         *val *= scale;
     }
 
-    // apply mask
+    // apply mask (in-place)
     if let Some(m) = mask {
-        scores = scores.add(m);
+        scores.add_inplace(m);
     }
 
     // softmax along last axis
@@ -71,7 +71,7 @@ pub fn scaled_dot_product_attention_backward(
         *val *= scale;
     }
     if let Some(m) = mask {
-        scores = scores.add(m);
+        scores.add_inplace(m);
     }
     let weights = crate::softmax::softmax(&scores);
 
