@@ -45,6 +45,31 @@ impl Linear {
         );
         out.add(&bias_broadcast)
     }
+
+    /// Backward pass for Linear layer.
+    /// d_output: [batch, out_features]
+    /// input: [batch, in_features] (cached from forward)
+    /// Returns: (d_input, d_weight, d_bias)
+    pub fn backward(&self, d_output: &Tensor, input: &Tensor) -> (Tensor, Tensor, Tensor) {
+        // y = x @ W^T + b
+        // d_input = d_output @ W          [batch, in]
+        // d_weight = d_output^T @ input   [out, in]
+        // d_bias = sum(d_output, axis=0)  [out]
+        let d_input = d_output.matmul(&self.weight);
+        let d_weight = d_output.transpose().matmul(input);
+
+        let batch = d_output.shape[0];
+        let out_features = d_output.shape[1];
+        let mut d_bias_data = vec![0.0_f32; out_features];
+        for b in 0..batch {
+            for o in 0..out_features {
+                d_bias_data[o] += d_output.data[b * out_features + o];
+            }
+        }
+        let d_bias = Tensor::new(d_bias_data, vec![out_features]);
+
+        (d_input, d_weight, d_bias)
+    }
 }
 
 #[cfg(test)]
@@ -136,5 +161,89 @@ mod tests {
 
         let x = Tensor::new(vec![1.0, 2.0], vec![1, 2]); // in_features mismatch
         linear.forward(&x);
+    }
+
+    // ==================== backward ====================
+
+    #[test]
+    fn test_backward_shapes() {
+        let linear = Linear::rand(3, 2);
+        let x = Tensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+        let d_output = Tensor::new(vec![1.0, 1.0, 1.0, 1.0], vec![2, 2]);
+        let (d_input, d_weight, d_bias) = linear.backward(&d_output, &x);
+        assert_eq!(d_input.shape, vec![2, 3]);
+        assert_eq!(d_weight.shape, vec![2, 3]);
+        assert_eq!(d_bias.shape, vec![2]);
+    }
+
+    #[test]
+    fn test_backward_numerical_gradient() {
+        let linear = Linear::new(
+            Tensor::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
+            Tensor::new(vec![0.5, -0.5], vec![2]),
+        );
+        let x = Tensor::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+        let d_output = Tensor::new(vec![1.0, 0.5, -0.5, 1.0], vec![2, 2]);
+        let (d_input, d_weight, d_bias) = linear.backward(&d_output, &x);
+
+        let eps = 1e-4;
+
+        // Check d_input
+        for i in 0..x.data.len() {
+            let mut x_plus = x.clone();
+            x_plus.data[i] += eps;
+            let mut x_minus = x.clone();
+            x_minus.data[i] -= eps;
+            let y_plus = linear.forward(&x_plus);
+            let y_minus = linear.forward(&x_minus);
+            let mut numerical = 0.0;
+            for j in 0..d_output.data.len() {
+                numerical += (y_plus.data[j] - y_minus.data[j]) / (2.0 * eps) * d_output.data[j];
+            }
+            assert!(
+                (d_input.data[i] - numerical).abs() < 1e-2,
+                "d_input[{}]: analytical {} vs numerical {}", i, d_input.data[i], numerical
+            );
+        }
+
+        // Check d_weight
+        for i in 0..linear.weight.data.len() {
+            let mut w_plus = linear.weight.clone();
+            w_plus.data[i] += eps;
+            let mut w_minus = linear.weight.clone();
+            w_minus.data[i] -= eps;
+            let l_plus = Linear::new(w_plus, linear.bias.clone());
+            let l_minus = Linear::new(w_minus, linear.bias.clone());
+            let y_plus = l_plus.forward(&x);
+            let y_minus = l_minus.forward(&x);
+            let mut numerical = 0.0;
+            for j in 0..d_output.data.len() {
+                numerical += (y_plus.data[j] - y_minus.data[j]) / (2.0 * eps) * d_output.data[j];
+            }
+            assert!(
+                (d_weight.data[i] - numerical).abs() < 1e-2,
+                "d_weight[{}]: {} vs {}", i, d_weight.data[i], numerical
+            );
+        }
+
+        // Check d_bias
+        for i in 0..linear.bias.data.len() {
+            let mut b_plus = linear.bias.clone();
+            b_plus.data[i] += eps;
+            let mut b_minus = linear.bias.clone();
+            b_minus.data[i] -= eps;
+            let l_plus = Linear::new(linear.weight.clone(), b_plus);
+            let l_minus = Linear::new(linear.weight.clone(), b_minus);
+            let y_plus = l_plus.forward(&x);
+            let y_minus = l_minus.forward(&x);
+            let mut numerical = 0.0;
+            for j in 0..d_output.data.len() {
+                numerical += (y_plus.data[j] - y_minus.data[j]) / (2.0 * eps) * d_output.data[j];
+            }
+            assert!(
+                (d_bias.data[i] - numerical).abs() < 1e-2,
+                "d_bias[{}]: {} vs {}", i, d_bias.data[i], numerical
+            );
+        }
     }
 }
