@@ -1,15 +1,15 @@
 # Training configuration
 # Lines starting with # are comments
 
-d_model = 256
-n_heads = 8
-d_ff = 1024
-n_layers = 6
+d_model = 128
+n_heads = 4
+d_ff = 512
+n_layers = 4
 seq_len = 256
-epochs = 50
+epochs = 80
 lr = 0.001
 dropout = 0.1
 batch_size = 16
-bpe_vocab_size = 2000
+bpe_vocab_size = 5000
 data_dir = data
 max_chars_per_file = 50000
