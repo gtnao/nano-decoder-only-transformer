@@ -20,62 +20,103 @@ pub mod transformer_block;
 
 const MODEL_PATH: &str = "model.bin";
 const TOKENIZER_PATH: &str = "tokenizer.txt";
+const DEFAULT_CONFIG_PATH: &str = "train_config.txt";
+
+/// Simple key=value config parser
+fn load_config(path: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    if let Ok(content) = std::fs::read_to_string(path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((key, val)) = line.split_once('=') {
+                map.insert(key.trim().to_string(), val.trim().to_string());
+            }
+        }
+    }
+    map
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mode = args.get(1).map(|s| s.as_str()).unwrap_or("help");
 
     match mode {
-        "train" => cmd_train(),
+        "train" => {
+            let config_path = args.get(2).map(|s| s.as_str()).unwrap_or(DEFAULT_CONFIG_PATH);
+            cmd_train(config_path);
+        }
         "generate" => cmd_generate(&args[2..]),
         _ => {
             eprintln!("Usage:");
-            eprintln!("  cargo run --release -- train");
-            eprintln!("  cargo run --release -- generate \"prompt text\"");
+            eprintln!("  cargo run --release -- train [config_file]");
             eprintln!("  cargo run --release -- generate \"prompt text\" [temperature]");
         }
     }
 }
 
-fn cmd_train() {
+fn cmd_train(config_path: &str) {
     use bpe_tokenizer::BpeTokenizer;
     use generate::generate;
     use train::train_with_batch;
     use transformer::Transformer;
 
-    // Load corpus
-    let files = [
-        "data/kumo_no_ito.txt",
-        "data/rashomon.txt",
-        "data/hana.txt",
-        "data/hashire_merosu.txt",
-        "data/chuumon.txt",
-    ];
+    let cfg = load_config(config_path);
+    let get = |key: &str, default: &str| -> String {
+        cfg.get(key).cloned().unwrap_or_else(|| default.to_string())
+    };
+
+    let d_model: usize = get("d_model", "128").parse().unwrap();
+    let n_heads: usize = get("n_heads", "4").parse().unwrap();
+    let d_ff: usize = get("d_ff", "512").parse().unwrap();
+    let n_layers: usize = get("n_layers", "4").parse().unwrap();
+    let seq_len: usize = get("seq_len", "128").parse().unwrap();
+    let epochs: usize = get("epochs", "30").parse().unwrap();
+    let lr: f32 = get("lr", "0.001").parse().unwrap();
+    let dropout: f32 = get("dropout", "0.1").parse().unwrap();
+    let batch_size: usize = get("batch_size", "8").parse().unwrap();
+    let bpe_vocab_size: usize = get("bpe_vocab_size", "1000").parse().unwrap();
+    let data_dir = get("data_dir", "data");
+    let max_chars: usize = get("max_chars_per_file", "0").parse().unwrap();
+
+    println!("Config: {}", config_path);
+
+    // Load corpus: all .txt files in data_dir
+    let mut files: Vec<_> = std::fs::read_dir(&data_dir)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", data_dir, e))
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            if path.extension().map(|e| e == "txt").unwrap_or(false) {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+    files.sort();
+
     let corpus: String = files
         .iter()
-        .map(|f| std::fs::read_to_string(f).unwrap_or_else(|_| panic!("Failed to read {}", f)))
+        .map(|f| {
+            let text = std::fs::read_to_string(f).unwrap_or_else(|_| panic!("Failed to read {:?}", f));
+            if max_chars > 0 && text.chars().count() > max_chars {
+                // Truncate to max_chars at a char boundary
+                text.chars().take(max_chars).collect::<String>()
+            } else {
+                text
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let corpus = corpus.trim();
 
     // Train BPE tokenizer
-    let bpe_vocab_size = 1000;
     let tokenizer = BpeTokenizer::train(corpus, bpe_vocab_size);
 
     println!("Corpus: {} chars ({} files)", corpus.chars().count(), files.len());
     println!("Vocab size: {} (BPE)", tokenizer.vocab_size());
-
-    // Model config
-    let d_model = 128;
-    let n_heads = 4;
-    let d_ff = 512;
-    let n_layers = 4;
-    let seq_len = 128;
-    let epochs = 30;
-    let lr = 0.001;
-    let dropout = 0.1;
-    let batch_size = 8;
-
     println!("Model: d_model={}, n_heads={}, d_ff={}, n_layers={}, dropout={}", d_model, n_heads, d_ff, n_layers, dropout);
     println!("Training: seq_len={}, epochs={}, lr={}, batch_size={}", seq_len, epochs, lr, batch_size);
 
