@@ -1,3 +1,4 @@
+use crate::softmax::softmax;
 use crate::tensor::Tensor;
 
 /// Cross Entropy Loss for language modeling.
@@ -26,6 +27,28 @@ pub fn cross_entropy_loss(logits: &Tensor, targets: &[usize]) -> f32 {
     }
 
     total_loss / seq_len as f32
+}
+
+/// Backward of cross entropy loss with softmax.
+/// Returns d_logits: [seq_len, vocab_size]
+/// d_logits = (softmax(logits) - one_hot(targets)) / seq_len
+pub fn cross_entropy_loss_backward(logits: &Tensor, targets: &[usize]) -> Tensor {
+    let seq_len = logits.shape[0];
+    let probs = softmax(logits);
+    let mut d_logits = probs.data.clone();
+    let vocab_size = logits.shape[1];
+
+    for pos in 0..seq_len {
+        d_logits[pos * vocab_size + targets[pos]] -= 1.0;
+    }
+
+    // Average over positions
+    let scale = 1.0 / seq_len as f32;
+    for v in d_logits.iter_mut() {
+        *v *= scale;
+    }
+
+    Tensor::new(d_logits, logits.shape.clone())
 }
 
 #[cfg(test)]
@@ -121,5 +144,71 @@ mod tests {
 
         // Both should be ln(3) since all uniform
         assert!((loss_2pos - loss_1pos).abs() < 0.001);
+    }
+
+    // ==================== backward ====================
+
+    fn assert_approx(a: &[f32], b: &[f32], eps: f32) {
+        assert_eq!(a.len(), b.len());
+        for (i, (&va, &vb)) in a.iter().zip(b.iter()).enumerate() {
+            assert!(
+                (va - vb).abs() < eps,
+                "index {}: {} vs {} (diff {})",
+                i, va, vb, (va - vb).abs()
+            );
+        }
+    }
+
+    #[test]
+    fn test_backward_shape() {
+        let logits = Tensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+        let targets = vec![0, 1];
+        let d_logits = cross_entropy_loss_backward(&logits, &targets);
+        assert_eq!(d_logits.shape, vec![2, 3]);
+    }
+
+    #[test]
+    fn test_backward_sums_to_zero_per_row() {
+        // d_logits = softmax - one_hot => each row sums to (1 - 1)/N = 0
+        let logits = Tensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+        let targets = vec![0, 2];
+        let d = cross_entropy_loss_backward(&logits, &targets);
+        let sum0: f32 = d.data[0..3].iter().sum();
+        let sum1: f32 = d.data[3..6].iter().sum();
+        assert!(sum0.abs() < 1e-5, "sum0: {}", sum0);
+        assert!(sum1.abs() < 1e-5, "sum1: {}", sum1);
+    }
+
+    #[test]
+    fn test_backward_target_position_negative() {
+        // Gradient at target index should be negative (softmax(i) - 1) / N < 0
+        let logits = Tensor::new(vec![1.0, 2.0, 3.0], vec![1, 3]);
+        let targets = vec![0];
+        let d = cross_entropy_loss_backward(&logits, &targets);
+        assert!(d.data[0] < 0.0, "d[target]: {}", d.data[0]);
+    }
+
+    #[test]
+    fn test_backward_numerical_gradient() {
+        // Verify backward against numerical gradient (finite differences)
+        let logits = Tensor::new(vec![1.0, 2.0, 3.0], vec![1, 3]);
+        let targets = vec![1];
+        let d = cross_entropy_loss_backward(&logits, &targets);
+
+        let eps = 1e-4;
+        for i in 0..3 {
+            let mut logits_plus = logits.clone();
+            logits_plus.data[i] += eps;
+            let mut logits_minus = logits.clone();
+            logits_minus.data[i] -= eps;
+            let numerical = (cross_entropy_loss(&logits_plus, &targets)
+                - cross_entropy_loss(&logits_minus, &targets))
+                / (2.0 * eps);
+            assert!(
+                (d.data[i] - numerical).abs() < 1e-3,
+                "index {}: analytical {} vs numerical {}",
+                i, d.data[i], numerical
+            );
+        }
     }
 }
