@@ -24,6 +24,36 @@ pub fn clip_grad_norm(grads: &mut [&mut [f32]], max_norm: f32) -> f32 {
     norm
 }
 
+/// Learning rate schedule: linear warmup + cosine decay.
+pub struct LRSchedule {
+    pub base_lr: f32,
+    pub warmup_steps: usize,
+    pub total_steps: usize,
+}
+
+impl LRSchedule {
+    pub fn new(base_lr: f32, warmup_steps: usize, total_steps: usize) -> Self {
+        Self { base_lr, warmup_steps, total_steps }
+    }
+
+    /// Compute learning rate at given step (0-indexed).
+    pub fn get_lr(&self, step: usize) -> f32 {
+        if step < self.warmup_steps {
+            // Linear warmup: 0 -> base_lr
+            self.base_lr * (step + 1) as f32 / self.warmup_steps as f32
+        } else {
+            // Cosine decay: base_lr -> 0
+            let decay_steps = self.total_steps - self.warmup_steps;
+            if decay_steps == 0 {
+                return self.base_lr;
+            }
+            let progress = (step - self.warmup_steps) as f32 / decay_steps as f32;
+            let progress = progress.min(1.0);
+            self.base_lr * 0.5 * (1.0 + (std::f32::consts::PI * progress).cos())
+        }
+    }
+}
+
 /// SGD optimizer (Stochastic Gradient Descent)
 pub struct SGD {
     pub lr: f32,
@@ -73,6 +103,11 @@ impl Adam {
         self.t += 1;
     }
 
+    /// Set learning rate (for use with LRSchedule).
+    pub fn set_lr(&mut self, lr: f32) {
+        self.lr = lr;
+    }
+
     /// Update parameter group `idx`.
     pub fn update(&mut self, idx: usize, param: &mut [f32], grad: &[f32]) {
         assert_eq!(param.len(), grad.len());
@@ -95,6 +130,45 @@ impl Adam {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==================== LRSchedule ====================
+
+    #[test]
+    fn test_lr_schedule_warmup() {
+        let sched = LRSchedule::new(0.001, 10, 100);
+        // Step 0: lr = 0.001 * 1/10 = 0.0001
+        assert!((sched.get_lr(0) - 0.0001).abs() < 1e-7);
+        // Step 4: lr = 0.001 * 5/10 = 0.0005
+        assert!((sched.get_lr(4) - 0.0005).abs() < 1e-7);
+        // Step 9: lr = 0.001 * 10/10 = 0.001 (peak)
+        assert!((sched.get_lr(9) - 0.001).abs() < 1e-7);
+    }
+
+    #[test]
+    fn test_lr_schedule_cosine_decay() {
+        let sched = LRSchedule::new(0.001, 0, 100);
+        // Step 0: full lr
+        assert!((sched.get_lr(0) - 0.001).abs() < 1e-6);
+        // Step 50: half lr (cosine at pi/2)
+        assert!((sched.get_lr(50) - 0.0005).abs() < 1e-4);
+        // Step 99: near 0
+        assert!(sched.get_lr(99) < 0.0001);
+    }
+
+    #[test]
+    fn test_lr_schedule_warmup_then_decay() {
+        let sched = LRSchedule::new(0.01, 10, 110);
+        // Warmup phase: monotonically increasing
+        for i in 0..9 {
+            assert!(sched.get_lr(i) < sched.get_lr(i + 1));
+        }
+        // Peak at end of warmup
+        assert!((sched.get_lr(9) - 0.01).abs() < 1e-6);
+        // Decay phase: monotonically decreasing
+        for i in 10..109 {
+            assert!(sched.get_lr(i) >= sched.get_lr(i + 1));
+        }
+    }
 
     // ==================== clip_grad_norm ====================
 

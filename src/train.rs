@@ -1,5 +1,5 @@
 use crate::loss::{cross_entropy_loss, cross_entropy_loss_backward};
-use crate::optimizer::Adam;
+use crate::optimizer::{Adam, LRSchedule};
 use crate::tokenizer::Tokenizer;
 use crate::transformer::Transformer;
 
@@ -64,13 +64,19 @@ pub fn train(
     }
 
     let max_grad_norm = 1.0;
+    let total_steps = data.len() * epochs;
+    let warmup_steps = total_steps / 10; // 10% warmup
+    let schedule = LRSchedule::new(lr, warmup_steps, total_steps);
     let mut adam = Adam::new(lr, &model.param_sizes());
     let mut losses = Vec::new();
+    let mut step = 0;
 
     for _epoch in 0..epochs {
         for (input, target) in &data {
+            adam.set_lr(schedule.get_lr(step));
             let loss = train_step(model, &mut adam, input, target, max_grad_norm);
             losses.push(loss);
+            step += 1;
         }
     }
 
