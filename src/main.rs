@@ -2,6 +2,7 @@ pub mod activation;
 pub mod attention;
 pub mod embedding;
 pub mod feed_forward;
+pub mod generate;
 pub mod layer_norm;
 pub mod linear;
 pub mod multi_head_attention;
