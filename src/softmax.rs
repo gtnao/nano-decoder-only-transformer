@@ -25,6 +25,32 @@ pub fn softmax(x: &Tensor) -> Tensor {
     Tensor::new(data, x.shape.clone())
 }
 
+/// Softmax backward along the last axis.
+/// d_output: same shape as softmax output
+/// softmax_output: cached softmax output from forward
+/// d_input[i] = s[i] * (d_output[i] - Σ(d_output[j] * s[j]))
+pub fn softmax_backward(d_output: &Tensor, softmax_output: &Tensor) -> Tensor {
+    let last_dim = *softmax_output.shape.last().expect("empty shape");
+    let num_groups = softmax_output.data.len() / last_dim;
+    let mut data = vec![0.0_f32; softmax_output.data.len()];
+
+    for g in 0..num_groups {
+        let start = g * last_dim;
+        let s = &softmax_output.data[start..start + last_dim];
+        let dy = &d_output.data[start..start + last_dim];
+
+        // dot = Σ(dy[j] * s[j])
+        let dot: f32 = s.iter().zip(dy.iter()).map(|(&si, &di)| si * di).sum();
+
+        // d_input[i] = s[i] * (dy[i] - dot)
+        for i in 0..last_dim {
+            data[start + i] = s[i] * (dy[i] - dot);
+        }
+    }
+
+    Tensor::new(data, softmax_output.shape.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +131,69 @@ mod tests {
         for i in 0..4 {
             let sum: f32 = y.data[i * 3..(i + 1) * 3].iter().sum();
             assert!((sum - 1.0).abs() < 1e-5);
+        }
+    }
+
+    // ==================== backward ====================
+
+    #[test]
+    fn test_softmax_backward_shape() {
+        let x = Tensor::new(vec![1.0, 2.0, 3.0], vec![3]);
+        let s = softmax(&x);
+        let d_out = Tensor::new(vec![1.0, 0.0, 0.0], vec![3]);
+        let d_in = softmax_backward(&d_out, &s);
+        assert_eq!(d_in.shape, vec![3]);
+    }
+
+    #[test]
+    fn test_softmax_backward_numerical() {
+        let x = Tensor::new(vec![1.0, 2.0, 3.0], vec![3]);
+        let s = softmax(&x);
+        let d_out = Tensor::new(vec![1.0, -0.5, 0.5], vec![3]);
+        let d_in = softmax_backward(&d_out, &s);
+
+        let eps = 1e-4;
+        for i in 0..3 {
+            let mut x_plus = x.clone();
+            x_plus.data[i] += eps;
+            let mut x_minus = x.clone();
+            x_minus.data[i] -= eps;
+            let s_plus = softmax(&x_plus);
+            let s_minus = softmax(&x_minus);
+            let mut numerical = 0.0;
+            for j in 0..3 {
+                numerical += (s_plus.data[j] - s_minus.data[j]) / (2.0 * eps) * d_out.data[j];
+            }
+            assert!(
+                (d_in.data[i] - numerical).abs() < 1e-2,
+                "index {}: analytical {} vs numerical {}", i, d_in.data[i], numerical
+            );
+        }
+    }
+
+    #[test]
+    fn test_softmax_backward_2d_numerical() {
+        let x = Tensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+        let s = softmax(&x);
+        let d_out = Tensor::new(vec![0.1, 0.2, 0.3, -0.1, 0.5, -0.4], vec![2, 3]);
+        let d_in = softmax_backward(&d_out, &s);
+
+        let eps = 1e-4;
+        for i in 0..6 {
+            let mut x_plus = x.clone();
+            x_plus.data[i] += eps;
+            let mut x_minus = x.clone();
+            x_minus.data[i] -= eps;
+            let s_plus = softmax(&x_plus);
+            let s_minus = softmax(&x_minus);
+            let mut numerical = 0.0;
+            for j in 0..6 {
+                numerical += (s_plus.data[j] - s_minus.data[j]) / (2.0 * eps) * d_out.data[j];
+            }
+            assert!(
+                (d_in.data[i] - numerical).abs() < 1e-2,
+                "index {}: analytical {} vs numerical {}", i, d_in.data[i], numerical
+            );
         }
     }
 }
