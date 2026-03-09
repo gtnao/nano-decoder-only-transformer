@@ -1,66 +1,53 @@
 #!/bin/bash
-# 青空文庫からテキストを取得するスクリプト
-# Usage: ./scripts/fetch_aozora.sh <URL> <output_file>
-# Example: ./scripts/fetch_aozora.sh https://www.aozora.gr.jp/cards/000879/files/92_14545.html data/kumo_no_ito.txt
+# 青空文庫テキストを取得・クリーニングするスクリプト
+# aozorahack/aozorabunko_text + aozorabunko-extractor を使用
+#
+# 前提: pip install aozorabunko-extractor
+#
+# Usage:
+#   ./scripts/fetch_aozora.sh <card_no/file_dir> <output_file>
+#
+# Examples:
+#   ./scripts/fetch_aozora.sh 000879/92_ruby_164     data/kumo_no_ito.txt       # 蜘蛛の糸 (芥川)
+#   ./scripts/fetch_aozora.sh 000879/127_ruby_150    data/rashomon.txt           # 羅生門 (芥川)
+#   ./scripts/fetch_aozora.sh 000879/42_ruby_154     data/hana.txt              # 鼻 (芥川)
+#   ./scripts/fetch_aozora.sh 000035/1567_ruby_4948  data/hashire_merosu.txt    # 走れメロス (太宰)
+#   ./scripts/fetch_aozora.sh 000081/43754_ruby_17058 data/chuumon.txt          # 注文の多い料理店 (宮沢)
 
 set -euo pipefail
 
+REPO_DIR="/tmp/aozorabunko_text"
+REPO_URL="https://github.com/aozorahack/aozorabunko_text.git"
+
 if [ $# -ne 2 ]; then
-    echo "Usage: $0 <aozora_html_url> <output_file>" >&2
-    echo "Example: $0 https://www.aozora.gr.jp/cards/000879/files/92_14545.html data/kumo_no_ito.txt" >&2
+    echo "Usage: $0 <card_no/file_dir> <output_file>" >&2
     exit 1
 fi
 
-URL="$1"
+CARD_PATH="$1"
 OUTPUT="$2"
+CARD_NO=$(dirname "$CARD_PATH")
+FILE_DIR=$(basename "$CARD_PATH")
 
-curl -s "$URL" \
-  | iconv -f SHIFT_JIS -t UTF-8 2>/dev/null \
-  | python3 -c "
-import sys, re, html
+# Clone repo if not present
+if [ ! -d "$REPO_DIR" ]; then
+    echo "Cloning aozorabunko_text..." >&2
+    git clone --depth 1 "$REPO_URL" "$REPO_DIR" 2>&1 | tail -1 >&2
+fi
 
-text = sys.stdin.read()
+INPUT_DIR="${REPO_DIR}/cards/${CARD_NO}/files/${FILE_DIR}"
+if [ ! -d "$INPUT_DIR" ]; then
+    echo "Error: $INPUT_DIR not found" >&2
+    exit 1
+fi
 
-# Remove ruby readings: keep base text only
-text = re.sub(r'<ruby><rb>(.*?)</rb><rp>[（(]</rp><rt>.*?</rt><rp>[）)]</rp></ruby>', r'\1', text)
-text = re.sub(r'<ruby>(.*?)<rt>.*?</rt></ruby>', r'\1', text)
+# Extract and clean using aozorabunko-extractor
+TMPDIR=$(mktemp -d)
+python3 -c "from aozorabunko_extractor import cli; cli.main()" \
+    -i "$INPUT_DIR" -o "$TMPDIR" 2>/dev/null
 
-# Remove all HTML tags
-text = re.sub(r'<[^>]+>', '\n', text)
-
-# Decode HTML entities
-text = html.unescape(text)
-
-# Remove Aozora annotations
-text = re.sub(r'[\[［]＃[^\]］]*[\]］]', '', text)
-
-# Clean whitespace
-text = re.sub(r'[ \t]+', '', text)
-text = re.sub(r'\n{2,}', '\n', text)
-text = text.strip()
-
-lines = text.split('\n')
-
-# Find content boundaries
-start = None
-end = len(lines)
-for i, line in enumerate(lines):
-    stripped = line.strip()
-    # First section marker (一, 上, etc.) or first indented paragraph
-    if start is None and (stripped in ['一', '上'] or stripped.startswith('　')):
-        start = i
-    # Date at the end like （大正...） or （昭和...）
-    if re.match(r'[（(](大正|明治|昭和|平成|令和)', stripped):
-        end = i + 1
-
-if start is None:
-    start = 0
-
-print('\n'.join(lines[start:end]).strip())
-" > "$OUTPUT"
+cp "$TMPDIR/all.txt" "$OUTPUT"
+rm -rf "$TMPDIR"
 
 CHARS=$(wc -m < "$OUTPUT")
-UNIQUE=$(grep -o . "$OUTPUT" | sort -u | wc -l)
-echo "Saved to $OUTPUT"
-echo "Total chars: $CHARS"
-echo "Unique chars: $UNIQUE"
+echo "Saved to $OUTPUT (${CHARS} chars)" >&2
