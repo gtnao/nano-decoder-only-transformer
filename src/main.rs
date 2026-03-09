@@ -23,20 +23,31 @@ fn main() {
     use train::train;
     use transformer::Transformer;
 
-    let corpus = std::fs::read_to_string("data/kumo_no_ito.txt")
-        .expect("Failed to read data/kumo_no_ito.txt");
+    // Load multiple works from Aozora Bunko
+    let files = [
+        "data/kumo_no_ito.txt",
+        "data/rashomon.txt",
+        "data/hana.txt",
+        "data/hashire_merosu.txt",
+        "data/chuumon.txt",
+    ];
+    let corpus: String = files
+        .iter()
+        .map(|f| std::fs::read_to_string(f).unwrap_or_else(|_| panic!("Failed to read {}", f)))
+        .collect::<Vec<_>>()
+        .join("\n");
     let corpus = corpus.trim();
     let tokenizer = Tokenizer::from_corpus(corpus);
 
-    println!("Corpus: {} chars", corpus.chars().count());
+    println!("Corpus: {} chars ({} files)", corpus.chars().count(), files.len());
     println!("Vocab size: {}", tokenizer.vocab_size());
 
-    let d_model = 64;
+    let d_model = 128;
     let n_heads = 4;
-    let d_ff = 128;
-    let n_layers = 2;
-    let seq_len = 64;
-    let epochs = 50;
+    let d_ff = 512;
+    let n_layers = 4;
+    let seq_len = 128;
+    let epochs = 30;
     let lr = 0.001;
     let dropout = 0.1;
 
@@ -46,16 +57,18 @@ fn main() {
     let mut model = Transformer::rand_with_dropout(tokenizer.vocab_size(), d_model, n_heads, d_ff, n_layers, dropout);
 
     // Generate before training
-    let prompt = "極楽";
+    let prompt = "ある日";
     println!("\n--- Before training ---");
     let result = generate(&model, &tokenizer, prompt, 50, 0.01);
     println!("\"{}\"", result);
 
     // Train
     println!("\n--- Training ---");
+    let start = std::time::Instant::now();
     let losses = train(&mut model, &tokenizer, corpus, seq_len, epochs, lr);
+    let elapsed = start.elapsed();
     let n = losses.len();
-    println!("Steps: {}", n);
+    println!("Steps: {} ({:.1}s)", n, elapsed.as_secs_f64());
     // Print loss at intervals
     for i in [0, n/4, n/2, 3*n/4, n-1] {
         println!("  step {:>4}: loss={:.4}", i, losses[i]);
@@ -63,9 +76,10 @@ fn main() {
 
     // Generate after training
     println!("\n--- After training ---");
-    for prompt in &["極楽", "地獄", "蜘蛛の糸"] {
-        let result = generate(&model, &tokenizer, prompt, 80, 0.8);
-        println!("\"{}\"", result);
+    for prompt in &["ある日の", "メロスは", "下人は", "蜘蛛の糸", "二人の若い紳士"] {
+        let result = generate(&model, &tokenizer, prompt, 100, 0.8);
+        println!("prompt: \"{}\"", prompt);
+        println!("  → {}", result);
         println!();
     }
 }

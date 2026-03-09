@@ -35,7 +35,7 @@ Rust でフレームワークなし（rand のみ）で Decoder-Only Transformer
 29. [x] 勾配クリッピング
 30. [x] 学習率スケジューリング — linear warmup + cosine decay
 31. [x] Dropout
-32. [ ] 日本語コーパスでの学習デモ
+32. [x] 日本語コーパスでの学習デモ
 
 ## 各ステップの進め方（必ずこの順序で行う）
 
