@@ -12,33 +12,49 @@ pub mod positional_encoding;
 pub mod softmax;
 pub mod tensor;
 pub mod tokenizer;
+pub mod train;
 pub mod transformer;
 pub mod transformer_block;
 
 fn main() {
     use generate::generate;
     use tokenizer::Tokenizer;
+    use train::train;
     use transformer::Transformer;
 
-    let corpus = "hello world this is a test of the transformer model";
+    let corpus = "hello world hello world hello world";
     let tokenizer = Tokenizer::from_corpus(corpus);
 
     println!("Vocab size: {}", tokenizer.vocab_size());
-    println!("Vocab: {:?}", &tokenizer.id_to_char[2..]); // skip PAD, UNK
 
-    // Tiny random model (untrained)
-    let model = Transformer::rand(tokenizer.vocab_size(), 32, 4, 64, 2);
+    let mut model = Transformer::rand(tokenizer.vocab_size(), 32, 4, 64, 2);
 
+    // Generate before training
     let prompt = "hello";
-    println!("\nPrompt: \"{}\"", prompt);
-
-    println!("\n--- Greedy (temperature=0.01) ---");
+    println!("\n--- Before training ---");
     let result = generate(&model, &tokenizer, prompt, 20, 0.01);
-    println!("Output: \"{}\"", result);
+    println!("Prompt: \"{}\" -> \"{}\"", prompt, result);
 
-    println!("\n--- Sampling (temperature=1.0) ---");
+    // Train
+    println!("\n--- Training ---");
+    let losses = train(&mut model, &tokenizer, corpus, 8, 100, 0.001);
+    let first = losses[0];
+    let last = *losses.last().unwrap();
+    println!(
+        "Steps: {}, Loss: {:.4} -> {:.4}",
+        losses.len(),
+        first,
+        last
+    );
+
+    // Generate after training
+    println!("\n--- After training ---");
+    let result = generate(&model, &tokenizer, prompt, 20, 0.01);
+    println!("Prompt: \"{}\" -> \"{}\"", prompt, result);
+
+    println!("\n--- Sampling (temperature=0.8) ---");
     for i in 0..3 {
-        let result = generate(&model, &tokenizer, prompt, 20, 1.0);
+        let result = generate(&model, &tokenizer, prompt, 20, 0.8);
         println!("Output {}: \"{}\"", i + 1, result);
     }
 }
