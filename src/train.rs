@@ -25,6 +25,7 @@ pub fn train_step(
     adam: &mut Adam,
     input: &[usize],
     target: &[usize],
+    max_grad_norm: f32,
 ) -> f32 {
     // Forward
     let logits = model.forward(input);
@@ -34,7 +35,10 @@ pub fn train_step(
 
     // Backward
     let d_logits = cross_entropy_loss_backward(&logits, target);
-    let grads = model.backward(&d_logits, input);
+    let mut grads = model.backward(&d_logits, input);
+
+    // Gradient clipping
+    grads.clip_norm(max_grad_norm);
 
     // Update
     model.apply_gradients(&grads, adam);
@@ -59,12 +63,13 @@ pub fn train(
         return Vec::new();
     }
 
+    let max_grad_norm = 1.0;
     let mut adam = Adam::new(lr, &model.param_sizes());
     let mut losses = Vec::new();
 
     for _epoch in 0..epochs {
         for (input, target) in &data {
-            let loss = train_step(model, &mut adam, input, target);
+            let loss = train_step(model, &mut adam, input, target, max_grad_norm);
             losses.push(loss);
         }
     }
@@ -114,7 +119,7 @@ mod tests {
         let mut adam = Adam::new(0.001, &model.param_sizes());
         let input = vec![2, 3, 4]; // some token ids
         let target = vec![3, 4, 5];
-        let loss = train_step(&mut model, &mut adam, &input, &target);
+        let loss = train_step(&mut model, &mut adam, &input, &target, 1.0);
         assert!(loss.is_finite(), "loss should be finite, got {}", loss);
     }
 

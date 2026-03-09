@@ -1,3 +1,29 @@
+/// Gradient clipping by global norm.
+/// Computes L2 norm across all gradient slices. If it exceeds max_norm,
+/// scales all gradients down so the total norm equals max_norm.
+/// Returns the original norm before clipping.
+pub fn clip_grad_norm(grads: &mut [&mut [f32]], max_norm: f32) -> f32 {
+    // Compute global L2 norm
+    let mut total_sq = 0.0_f32;
+    for g in grads.iter() {
+        for &v in g.iter() {
+            total_sq += v * v;
+        }
+    }
+    let norm = total_sq.sqrt();
+
+    if norm > max_norm {
+        let scale = max_norm / norm;
+        for g in grads.iter_mut() {
+            for v in g.iter_mut() {
+                *v *= scale;
+            }
+        }
+    }
+
+    norm
+}
+
 /// SGD optimizer (Stochastic Gradient Descent)
 pub struct SGD {
     pub lr: f32,
@@ -69,6 +95,49 @@ impl Adam {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ==================== clip_grad_norm ====================
+
+    #[test]
+    fn test_clip_grad_norm_no_clip() {
+        // norm = sqrt(1+4+9) = sqrt(14) ≈ 3.74, max_norm=5.0 => no clipping
+        let mut g = vec![1.0, 2.0, 3.0];
+        let norm = clip_grad_norm(&mut [&mut g[..]], 5.0);
+        assert!((norm - 14.0_f32.sqrt()).abs() < 1e-5);
+        assert!((g[0] - 1.0).abs() < 1e-6); // unchanged
+    }
+
+    #[test]
+    fn test_clip_grad_norm_clips() {
+        // norm = sqrt(9+16) = 5.0, max_norm=1.0 => scale by 1/5
+        let mut g = vec![3.0, 4.0];
+        let norm = clip_grad_norm(&mut [&mut g[..]], 1.0);
+        assert!((norm - 5.0).abs() < 1e-5);
+        assert!((g[0] - 0.6).abs() < 1e-5);
+        assert!((g[1] - 0.8).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_clip_grad_norm_multiple_slices() {
+        // Two slices: [3.0] and [4.0], global norm = 5.0, max_norm=2.5
+        let mut g1 = vec![3.0];
+        let mut g2 = vec![4.0];
+        clip_grad_norm(&mut [&mut g1[..], &mut g2[..]], 2.5);
+        // scale = 2.5 / 5.0 = 0.5
+        assert!((g1[0] - 1.5).abs() < 1e-5);
+        assert!((g2[0] - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_clip_grad_norm_preserves_direction() {
+        let mut g = vec![3.0, 4.0];
+        clip_grad_norm(&mut [&mut g[..]], 1.0);
+        // After clipping, ratio should be preserved: g[0]/g[1] = 3/4
+        assert!((g[0] / g[1] - 0.75).abs() < 1e-5);
+        // New norm should be max_norm
+        let new_norm = (g[0] * g[0] + g[1] * g[1]).sqrt();
+        assert!((new_norm - 1.0).abs() < 1e-5);
+    }
 
     // ==================== SGD ====================
 

@@ -1,7 +1,7 @@
 use crate::embedding::Embedding;
 use crate::layer_norm::LayerNorm;
 use crate::linear::Linear;
-use crate::optimizer::Adam;
+use crate::optimizer::{Adam, clip_grad_norm};
 use crate::positional_encoding::positional_encoding;
 use crate::tensor::Tensor;
 use crate::transformer_block::{TransformerBlock, TransformerBlockGradients};
@@ -13,6 +13,41 @@ pub struct TransformerGradients {
     pub d_ln_final_beta: Tensor,
     pub d_lm_head_weight: Tensor,
     pub d_lm_head_bias: Tensor,
+}
+
+impl TransformerGradients {
+    /// Clip all gradients by global L2 norm. Returns original norm.
+    pub fn clip_norm(&mut self, max_norm: f32) -> f32 {
+        let mut slices: Vec<&mut [f32]> = Vec::new();
+
+        slices.push(&mut self.d_embedding_weight.data);
+
+        for bg in &mut self.block_grads {
+            slices.push(&mut bg.d_ln1_gamma.data);
+            slices.push(&mut bg.d_ln1_beta.data);
+            slices.push(&mut bg.mha_grads.d_wq_weight.data);
+            slices.push(&mut bg.mha_grads.d_wq_bias.data);
+            slices.push(&mut bg.mha_grads.d_wk_weight.data);
+            slices.push(&mut bg.mha_grads.d_wk_bias.data);
+            slices.push(&mut bg.mha_grads.d_wv_weight.data);
+            slices.push(&mut bg.mha_grads.d_wv_bias.data);
+            slices.push(&mut bg.mha_grads.d_wo_weight.data);
+            slices.push(&mut bg.mha_grads.d_wo_bias.data);
+            slices.push(&mut bg.d_ln2_gamma.data);
+            slices.push(&mut bg.d_ln2_beta.data);
+            slices.push(&mut bg.ffn_grads.d_l1_weight.data);
+            slices.push(&mut bg.ffn_grads.d_l1_bias.data);
+            slices.push(&mut bg.ffn_grads.d_l2_weight.data);
+            slices.push(&mut bg.ffn_grads.d_l2_bias.data);
+        }
+
+        slices.push(&mut self.d_ln_final_gamma.data);
+        slices.push(&mut self.d_ln_final_beta.data);
+        slices.push(&mut self.d_lm_head_weight.data);
+        slices.push(&mut self.d_lm_head_bias.data);
+
+        clip_grad_norm(&mut slices, max_norm)
+    }
 }
 
 /// Decoder-Only Transformer
