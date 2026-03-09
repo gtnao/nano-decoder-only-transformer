@@ -38,6 +38,56 @@ impl LayerNorm {
 
         Tensor::new(data, x.shape.clone())
     }
+
+    /// Backward pass for LayerNorm.
+    /// d_output: same shape as forward output
+    /// x: cached input from forward
+    /// Returns: (d_input, d_gamma, d_beta)
+    pub fn backward(&self, d_output: &Tensor, x: &Tensor) -> (Tensor, Tensor, Tensor) {
+        let last_dim = *x.shape.last().expect("empty shape");
+        let num_groups = x.data.len() / last_dim;
+        let n = last_dim as f32;
+
+        let mut d_input = vec![0.0_f32; x.data.len()];
+        let mut d_gamma = vec![0.0_f32; last_dim];
+        let mut d_beta = vec![0.0_f32; last_dim];
+
+        for g in 0..num_groups {
+            let start = g * last_dim;
+            let group = &x.data[start..start + last_dim];
+            let dy = &d_output.data[start..start + last_dim];
+
+            let mean = group.iter().sum::<f32>() / n;
+            let var = group.iter().map(|&v| (v - mean) * (v - mean)).sum::<f32>() / n;
+            let std_inv = 1.0 / (var + self.eps).sqrt();
+
+            // normalized values: x_hat[i] = (x[i] - mean) * std_inv
+            let x_hat: Vec<f32> = group.iter().map(|&v| (v - mean) * std_inv).collect();
+
+            // d_gamma and d_beta accumulate over groups
+            for i in 0..last_dim {
+                d_gamma[i] += dy[i] * x_hat[i];
+                d_beta[i] += dy[i];
+            }
+
+            // d_input: apply chain rule through normalization
+            // dy_hat[i] = dy[i] * gamma[i]
+            let dy_hat: Vec<f32> = (0..last_dim).map(|i| dy[i] * self.gamma.data[i]).collect();
+
+            let mean_dy_hat = dy_hat.iter().sum::<f32>() / n;
+            let mean_dy_hat_x_hat: f32 = dy_hat.iter().zip(x_hat.iter()).map(|(&d, &x)| d * x).sum::<f32>() / n;
+
+            for i in 0..last_dim {
+                d_input[start + i] = std_inv * (dy_hat[i] - mean_dy_hat - x_hat[i] * mean_dy_hat_x_hat);
+            }
+        }
+
+        (
+            Tensor::new(d_input, x.shape.clone()),
+            Tensor::new(d_gamma, vec![last_dim]),
+            Tensor::new(d_beta, vec![last_dim]),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -148,6 +198,73 @@ mod tests {
         for i in 0..4 {
             let sum: f32 = y.data[i * 2..(i + 1) * 2].iter().sum();
             assert!(sum.abs() < 1e-5);
+        }
+    }
+
+    // ==================== backward ====================
+
+    #[test]
+    fn test_backward_shapes() {
+        let ln = LayerNorm::new(3);
+        let x = Tensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+        let d_out = Tensor::new(vec![1.0; 6], vec![2, 3]);
+        let (d_input, d_gamma, d_beta) = ln.backward(&d_out, &x);
+        assert_eq!(d_input.shape, vec![2, 3]);
+        assert_eq!(d_gamma.shape, vec![3]);
+        assert_eq!(d_beta.shape, vec![3]);
+    }
+
+    #[test]
+    fn test_backward_numerical_d_input() {
+        let mut ln = LayerNorm::new(3);
+        ln.gamma = Tensor::new(vec![1.0, 2.0, 0.5], vec![3]);
+        ln.beta = Tensor::new(vec![0.1, -0.1, 0.2], vec![3]);
+        let x = Tensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+        let d_out = Tensor::new(vec![0.1, -0.2, 0.3, -0.1, 0.5, -0.4], vec![2, 3]);
+        let (d_input, _, _) = ln.backward(&d_out, &x);
+
+        let eps = 1e-4;
+        for i in 0..6 {
+            let mut x_plus = x.clone();
+            x_plus.data[i] += eps;
+            let mut x_minus = x.clone();
+            x_minus.data[i] -= eps;
+            let y_plus = ln.forward(&x_plus);
+            let y_minus = ln.forward(&x_minus);
+            let mut numerical = 0.0;
+            for j in 0..6 {
+                numerical += (y_plus.data[j] - y_minus.data[j]) / (2.0 * eps) * d_out.data[j];
+            }
+            assert!(
+                (d_input.data[i] - numerical).abs() < 1e-2,
+                "d_input[{}]: analytical {} vs numerical {}", i, d_input.data[i], numerical
+            );
+        }
+    }
+
+    #[test]
+    fn test_backward_numerical_d_gamma() {
+        let ln = LayerNorm::new(3);
+        let x = Tensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]);
+        let d_out = Tensor::new(vec![0.1, -0.2, 0.3, -0.1, 0.5, -0.4], vec![2, 3]);
+        let (_, d_gamma, _) = ln.backward(&d_out, &x);
+
+        let eps = 1e-4;
+        for i in 0..3 {
+            let mut ln_plus = LayerNorm::new(3);
+            ln_plus.gamma.data[i] += eps;
+            let mut ln_minus = LayerNorm::new(3);
+            ln_minus.gamma.data[i] -= eps;
+            let y_plus = ln_plus.forward(&x);
+            let y_minus = ln_minus.forward(&x);
+            let mut numerical = 0.0;
+            for j in 0..6 {
+                numerical += (y_plus.data[j] - y_minus.data[j]) / (2.0 * eps) * d_out.data[j];
+            }
+            assert!(
+                (d_gamma.data[i] - numerical).abs() < 1e-2,
+                "d_gamma[{}]: analytical {} vs numerical {}", i, d_gamma.data[i], numerical
+            );
         }
     }
 }
