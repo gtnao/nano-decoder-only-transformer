@@ -35,14 +35,15 @@ fn main() {
     let n_heads = 4;
     let d_ff = 128;
     let n_layers = 2;
-    let seq_len = 32;
-    let epochs = 30;
+    let seq_len = 64;
+    let epochs = 50;
     let lr = 0.001;
+    let dropout = 0.1;
 
-    println!("Model: d_model={}, n_heads={}, d_ff={}, n_layers={}", d_model, n_heads, d_ff, n_layers);
+    println!("Model: d_model={}, n_heads={}, d_ff={}, n_layers={}, dropout={}", d_model, n_heads, d_ff, n_layers, dropout);
     println!("Training: seq_len={}, epochs={}, lr={}", seq_len, epochs, lr);
 
-    let mut model = Transformer::rand(tokenizer.vocab_size(), d_model, n_heads, d_ff, n_layers);
+    let mut model = Transformer::rand_with_dropout(tokenizer.vocab_size(), d_model, n_heads, d_ff, n_layers, dropout);
 
     // Generate before training
     let prompt = "極楽";

@@ -32,6 +32,10 @@ Rust でフレームワークなし（rand のみ）で Decoder-Only Transformer
 26. [x] Transformer 全体の backward
 27. [x] パラメータ更新 — SGD or Adam
 28. [x] 学習ループ — データ準備、ミニバッチ、エポック
+29. [x] 勾配クリッピング
+30. [x] 学習率スケジューリング — linear warmup + cosine decay
+31. [x] Dropout
+32. [ ] 日本語コーパスでの学習デモ
 
 ## 各ステップの進め方（必ずこの順序で行う）
 
