@@ -1,3 +1,10 @@
+/// Common interface for tokenizers.
+pub trait TokenizerTrait {
+    fn vocab_size(&self) -> usize;
+    fn encode(&self, text: &str) -> Vec<usize>;
+    fn decode(&self, ids: &[usize]) -> String;
+}
+
 /// Simple character-level tokenizer.
 /// Each unique character gets an ID. Special tokens: <PAD>=0, <UNK>=1.
 pub struct Tokenizer {
@@ -47,6 +54,12 @@ impl Tokenizer {
             })
             .collect()
     }
+}
+
+impl TokenizerTrait for Tokenizer {
+    fn vocab_size(&self) -> usize { self.vocab_size() }
+    fn encode(&self, text: &str) -> Vec<usize> { self.encode(text) }
+    fn decode(&self, ids: &[usize]) -> String { self.decode(ids) }
 }
 
 #[cfg(test)]

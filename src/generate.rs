@@ -1,6 +1,6 @@
 use crate::softmax::softmax;
 use crate::tensor::Tensor;
-use crate::tokenizer::Tokenizer;
+use crate::tokenizer::TokenizerTrait;
 use crate::transformer::Transformer;
 
 /// Pick the token with the highest logit (greedy decoding).
@@ -38,7 +38,7 @@ pub fn sample_with_temperature(logits: &[f32], temperature: f32) -> usize {
 /// Auto-regressive text generation.
 pub fn generate(
     model: &Transformer,
-    tokenizer: &Tokenizer,
+    tokenizer: &dyn TokenizerTrait,
     prompt: &str,
     max_new_tokens: usize,
     temperature: f32,
@@ -69,6 +69,7 @@ pub fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokenizer::Tokenizer;
 
     // ==================== argmax ====================
 

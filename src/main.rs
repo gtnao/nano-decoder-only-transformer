@@ -1,5 +1,6 @@
 pub mod activation;
 pub mod attention;
+pub mod bpe_tokenizer;
 pub mod dropout;
 pub mod embedding;
 pub mod feed_forward;
@@ -18,8 +19,8 @@ pub mod transformer;
 pub mod transformer_block;
 
 fn main() {
+    use bpe_tokenizer::BpeTokenizer;
     use generate::generate;
-    use tokenizer::Tokenizer;
     use train::train_with_batch;
     use transformer::Transformer;
 
@@ -37,10 +38,12 @@ fn main() {
         .collect::<Vec<_>>()
         .join("\n");
     let corpus = corpus.trim();
-    let tokenizer = Tokenizer::from_corpus(corpus);
+
+    let bpe_vocab_size = 1000;
+    let tokenizer = BpeTokenizer::train(corpus, bpe_vocab_size);
 
     println!("Corpus: {} chars ({} files)", corpus.chars().count(), files.len());
-    println!("Vocab size: {}", tokenizer.vocab_size());
+    println!("Vocab size: {} (BPE)", tokenizer.vocab_size());
 
     let d_model = 128;
     let n_heads = 4;

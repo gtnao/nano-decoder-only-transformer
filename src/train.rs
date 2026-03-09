@@ -1,6 +1,6 @@
 use crate::loss::{cross_entropy_loss, cross_entropy_loss_backward};
 use crate::optimizer::{Adam, LRSchedule};
-use crate::tokenizer::Tokenizer;
+use crate::tokenizer::TokenizerTrait;
 use crate::transformer::{Transformer, TransformerGradients};
 
 /// Prepare training data: split token sequence into (input, target) pairs.
@@ -69,7 +69,7 @@ pub fn train_step_batch(
 /// Returns loss history (one per training step).
 pub fn train(
     model: &mut Transformer,
-    tokenizer: &Tokenizer,
+    tokenizer: &dyn TokenizerTrait,
     text: &str,
     seq_len: usize,
     epochs: usize,
@@ -81,7 +81,7 @@ pub fn train(
 /// Train with explicit batch size.
 pub fn train_with_batch(
     model: &mut Transformer,
-    tokenizer: &Tokenizer,
+    tokenizer: &dyn TokenizerTrait,
     text: &str,
     seq_len: usize,
     epochs: usize,
@@ -142,6 +142,7 @@ pub fn train_with_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokenizer::Tokenizer;
     use crate::transformer::{Transformer, TransformerGradients};
 
     #[test]
