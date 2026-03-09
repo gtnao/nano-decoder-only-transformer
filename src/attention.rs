@@ -12,7 +12,7 @@ pub fn causal_mask(seq_len: usize) -> Tensor {
     Tensor::new(data, vec![seq_len, seq_len])
 }
 
-/// Scaled Dot-Product Attention
+/// Scaled Dot-Product Attention (forward)
 /// attn = softmax((Q @ K^T / sqrt(d_k)) + mask) @ V
 ///
 /// Q: [seq_len, d_k]
@@ -48,6 +48,58 @@ pub fn scaled_dot_product_attention(
 
     // weights @ V => [seq_len, d_v]
     weights.matmul(v)
+}
+
+/// Backward pass for Scaled Dot-Product Attention.
+/// d_output: [seq_len, d_v]
+/// q, k, v, mask: cached from forward
+/// Returns: (d_q, d_k, d_v) with shapes matching Q, K, V
+pub fn scaled_dot_product_attention_backward(
+    d_output: &Tensor,
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+) -> (Tensor, Tensor, Tensor) {
+    let d_k = q.shape[1] as f32;
+    let scale = 1.0 / d_k.sqrt();
+
+    // Recompute forward intermediates
+    let kt = k.transpose();
+    let mut scores = q.matmul(&kt);
+    for val in scores.data.iter_mut() {
+        *val *= scale;
+    }
+    if let Some(m) = mask {
+        scores = scores.add(m);
+    }
+    let weights = crate::softmax::softmax(&scores);
+
+    // Backward through: output = weights @ V
+    // d_weights = d_output @ V^T
+    let vt = v.transpose();
+    let d_weights = d_output.matmul(&vt);
+    // d_v = weights^T @ d_output
+    let weights_t = weights.transpose();
+    let d_v = weights_t.matmul(d_output);
+
+    // Backward through softmax
+    let d_scores_scaled = crate::softmax::softmax_backward(&d_weights, &weights);
+
+    // Backward through scaling: d_scores = d_scores_scaled * scale
+    let mut d_scores = d_scores_scaled;
+    for val in d_scores.data.iter_mut() {
+        *val *= scale;
+    }
+
+    // Backward through: scores = Q @ K^T
+    // d_q = d_scores @ K
+    let d_q = d_scores.matmul(k);
+    // d_k = d_scores^T @ Q
+    let d_scores_t = d_scores.transpose();
+    let d_k_out = d_scores_t.matmul(q);
+
+    (d_q, d_k_out, d_v)
 }
 
 #[cfg(test)]
@@ -156,5 +208,157 @@ mod tests {
         // With scaling by 1/sqrt(4)=0.5, the attention should not be too sharp
         // Output should be somewhere between v[0] and v[1]
         assert!(out.data[0] > 0.0 && out.data[0] < 1.0);
+    }
+
+    // ==================== backward ====================
+
+    #[test]
+    fn test_attention_backward_shapes() {
+        // seq_len=2, d_k=3, d_v=2
+        let q = Tensor::new(vec![1.0, 0.0, 0.5, 0.0, 1.0, -0.5], vec![2, 3]);
+        let k = Tensor::new(vec![0.5, 1.0, 0.0, -0.5, 0.0, 1.0], vec![2, 3]);
+        let v = Tensor::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+        let d_out = Tensor::new(vec![0.1, 0.2, 0.3, 0.4], vec![2, 2]);
+        let (d_q, d_k, d_v) = scaled_dot_product_attention_backward(&d_out, &q, &k, &v, None);
+        assert_eq!(d_q.shape, vec![2, 3]);
+        assert_eq!(d_k.shape, vec![2, 3]);
+        assert_eq!(d_v.shape, vec![2, 2]);
+    }
+
+    #[test]
+    fn test_attention_backward_numerical_no_mask() {
+        let q = Tensor::new(vec![0.1, 0.2, 0.3, 0.4, -0.1, 0.5], vec![2, 3]);
+        let k = Tensor::new(vec![0.3, -0.1, 0.2, 0.1, 0.4, -0.2], vec![2, 3]);
+        let v = Tensor::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]);
+        let d_out = Tensor::new(vec![0.5, -0.3, 0.1, 0.7], vec![2, 2]);
+
+        let (d_q, d_k, d_v) = scaled_dot_product_attention_backward(&d_out, &q, &k, &v, None);
+
+        let eps = 1e-4;
+        let out_size = 4; // 2x2
+
+        // Check d_q
+        for i in 0..6 {
+            let mut q_plus = q.clone();
+            q_plus.data[i] += eps;
+            let mut q_minus = q.clone();
+            q_minus.data[i] -= eps;
+            let y_plus = scaled_dot_product_attention(&q_plus, &k, &v, None);
+            let y_minus = scaled_dot_product_attention(&q_minus, &k, &v, None);
+            let mut numerical = 0.0;
+            for j in 0..out_size {
+                numerical += (y_plus.data[j] - y_minus.data[j]) / (2.0 * eps) * d_out.data[j];
+            }
+            assert!(
+                (d_q.data[i] - numerical).abs() < 1e-2,
+                "d_q[{}]: analytical {} vs numerical {}", i, d_q.data[i], numerical
+            );
+        }
+
+        // Check d_k
+        for i in 0..6 {
+            let mut k_plus = k.clone();
+            k_plus.data[i] += eps;
+            let mut k_minus = k.clone();
+            k_minus.data[i] -= eps;
+            let y_plus = scaled_dot_product_attention(&q, &k_plus, &v, None);
+            let y_minus = scaled_dot_product_attention(&q, &k_minus, &v, None);
+            let mut numerical = 0.0;
+            for j in 0..out_size {
+                numerical += (y_plus.data[j] - y_minus.data[j]) / (2.0 * eps) * d_out.data[j];
+            }
+            assert!(
+                (d_k.data[i] - numerical).abs() < 1e-2,
+                "d_k[{}]: analytical {} vs numerical {}", i, d_k.data[i], numerical
+            );
+        }
+
+        // Check d_v
+        for i in 0..4 {
+            let mut v_plus = v.clone();
+            v_plus.data[i] += eps;
+            let mut v_minus = v.clone();
+            v_minus.data[i] -= eps;
+            let y_plus = scaled_dot_product_attention(&q, &k, &v_plus, None);
+            let y_minus = scaled_dot_product_attention(&q, &k, &v_minus, None);
+            let mut numerical = 0.0;
+            for j in 0..out_size {
+                numerical += (y_plus.data[j] - y_minus.data[j]) / (2.0 * eps) * d_out.data[j];
+            }
+            assert!(
+                (d_v.data[i] - numerical).abs() < 1e-2,
+                "d_v[{}]: analytical {} vs numerical {}", i, d_v.data[i], numerical
+            );
+        }
+    }
+
+    #[test]
+    fn test_attention_backward_numerical_with_mask() {
+        let q = Tensor::new(vec![0.1, 0.2, 0.3, 0.4, -0.1, 0.5, 0.2, -0.3, 0.1], vec![3, 3]);
+        let k = Tensor::new(vec![0.3, -0.1, 0.2, 0.1, 0.4, -0.2, -0.3, 0.1, 0.5], vec![3, 3]);
+        let v = Tensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![3, 2]);
+        let mask = causal_mask(3);
+        let d_out = Tensor::new(vec![0.5, -0.3, 0.1, 0.7, -0.2, 0.4], vec![3, 2]);
+
+        let (d_q, d_k, d_v) = scaled_dot_product_attention_backward(
+            &d_out, &q, &k, &v, Some(&mask),
+        );
+
+        let eps = 1e-4;
+        let out_size = 6; // 3x2
+
+        // Check d_q
+        for i in 0..9 {
+            let mut q_plus = q.clone();
+            q_plus.data[i] += eps;
+            let mut q_minus = q.clone();
+            q_minus.data[i] -= eps;
+            let y_plus = scaled_dot_product_attention(&q_plus, &k, &v, Some(&mask));
+            let y_minus = scaled_dot_product_attention(&q_minus, &k, &v, Some(&mask));
+            let mut numerical = 0.0;
+            for j in 0..out_size {
+                numerical += (y_plus.data[j] - y_minus.data[j]) / (2.0 * eps) * d_out.data[j];
+            }
+            assert!(
+                (d_q.data[i] - numerical).abs() < 1e-2,
+                "d_q[{}]: analytical {} vs numerical {}", i, d_q.data[i], numerical
+            );
+        }
+
+        // Check d_k
+        for i in 0..9 {
+            let mut k_plus = k.clone();
+            k_plus.data[i] += eps;
+            let mut k_minus = k.clone();
+            k_minus.data[i] -= eps;
+            let y_plus = scaled_dot_product_attention(&q, &k_plus, &v, Some(&mask));
+            let y_minus = scaled_dot_product_attention(&q, &k_minus, &v, Some(&mask));
+            let mut numerical = 0.0;
+            for j in 0..out_size {
+                numerical += (y_plus.data[j] - y_minus.data[j]) / (2.0 * eps) * d_out.data[j];
+            }
+            assert!(
+                (d_k.data[i] - numerical).abs() < 1e-2,
+                "d_k[{}]: analytical {} vs numerical {}", i, d_k.data[i], numerical
+            );
+        }
+
+        // Check d_v
+        for i in 0..6 {
+            let mut v_plus = v.clone();
+            v_plus.data[i] += eps;
+            let mut v_minus = v.clone();
+            v_minus.data[i] -= eps;
+            let y_plus = scaled_dot_product_attention(&q, &k, &v_plus, Some(&mask));
+            let y_minus = scaled_dot_product_attention(&q, &k, &v_minus, Some(&mask));
+            let mut numerical = 0.0;
+            for j in 0..out_size {
+                numerical += (y_plus.data[j] - y_minus.data[j]) / (2.0 * eps) * d_out.data[j];
+            }
+            assert!(
+                (d_v.data[i] - numerical).abs() < 1e-2,
+                "d_v[{}]: analytical {} vs numerical {}", i, d_v.data[i], numerical
+            );
+        }
     }
 }
