@@ -22,39 +22,48 @@ fn main() {
     use train::train;
     use transformer::Transformer;
 
-    let corpus = "hello world hello world hello world";
+    let corpus = std::fs::read_to_string("data/kumo_no_ito.txt")
+        .expect("Failed to read data/kumo_no_ito.txt");
+    let corpus = corpus.trim();
     let tokenizer = Tokenizer::from_corpus(corpus);
 
+    println!("Corpus: {} chars", corpus.chars().count());
     println!("Vocab size: {}", tokenizer.vocab_size());
 
-    let mut model = Transformer::rand(tokenizer.vocab_size(), 32, 4, 64, 2);
+    let d_model = 64;
+    let n_heads = 4;
+    let d_ff = 128;
+    let n_layers = 2;
+    let seq_len = 32;
+    let epochs = 30;
+    let lr = 0.001;
+
+    println!("Model: d_model={}, n_heads={}, d_ff={}, n_layers={}", d_model, n_heads, d_ff, n_layers);
+    println!("Training: seq_len={}, epochs={}, lr={}", seq_len, epochs, lr);
+
+    let mut model = Transformer::rand(tokenizer.vocab_size(), d_model, n_heads, d_ff, n_layers);
 
     // Generate before training
-    let prompt = "hello";
+    let prompt = "極楽";
     println!("\n--- Before training ---");
-    let result = generate(&model, &tokenizer, prompt, 20, 0.01);
-    println!("Prompt: \"{}\" -> \"{}\"", prompt, result);
+    let result = generate(&model, &tokenizer, prompt, 50, 0.01);
+    println!("\"{}\"", result);
 
     // Train
     println!("\n--- Training ---");
-    let losses = train(&mut model, &tokenizer, corpus, 8, 100, 0.001);
-    let first = losses[0];
-    let last = *losses.last().unwrap();
-    println!(
-        "Steps: {}, Loss: {:.4} -> {:.4}",
-        losses.len(),
-        first,
-        last
-    );
+    let losses = train(&mut model, &tokenizer, corpus, seq_len, epochs, lr);
+    let n = losses.len();
+    println!("Steps: {}", n);
+    // Print loss at intervals
+    for i in [0, n/4, n/2, 3*n/4, n-1] {
+        println!("  step {:>4}: loss={:.4}", i, losses[i]);
+    }
 
     // Generate after training
     println!("\n--- After training ---");
-    let result = generate(&model, &tokenizer, prompt, 20, 0.01);
-    println!("Prompt: \"{}\" -> \"{}\"", prompt, result);
-
-    println!("\n--- Sampling (temperature=0.8) ---");
-    for i in 0..3 {
-        let result = generate(&model, &tokenizer, prompt, 20, 0.8);
-        println!("Output {}: \"{}\"", i + 1, result);
+    for prompt in &["極楽", "地獄", "蜘蛛の糸"] {
+        let result = generate(&model, &tokenizer, prompt, 80, 0.8);
+        println!("\"{}\"", result);
+        println!();
     }
 }
