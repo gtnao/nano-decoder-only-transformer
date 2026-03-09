@@ -20,7 +20,7 @@ pub mod transformer_block;
 fn main() {
     use generate::generate;
     use tokenizer::Tokenizer;
-    use train::train;
+    use train::train_with_batch;
     use transformer::Transformer;
 
     // Load multiple works from Aozora Bunko
@@ -51,8 +51,10 @@ fn main() {
     let lr = 0.001;
     let dropout = 0.1;
 
+    let batch_size = 8;
+
     println!("Model: d_model={}, n_heads={}, d_ff={}, n_layers={}, dropout={}", d_model, n_heads, d_ff, n_layers, dropout);
-    println!("Training: seq_len={}, epochs={}, lr={}", seq_len, epochs, lr);
+    println!("Training: seq_len={}, epochs={}, lr={}, batch_size={}", seq_len, epochs, lr, batch_size);
 
     let mut model = Transformer::rand_with_dropout(tokenizer.vocab_size(), d_model, n_heads, d_ff, n_layers, dropout);
 
@@ -65,7 +67,7 @@ fn main() {
     // Train
     println!("\n--- Training ---");
     let start = std::time::Instant::now();
-    let losses = train(&mut model, &tokenizer, corpus, seq_len, epochs, lr);
+    let losses = train_with_batch(&mut model, &tokenizer, corpus, seq_len, epochs, lr, batch_size);
     let elapsed = start.elapsed();
     let n = losses.len();
     println!("Steps: {} ({:.1}s)", n, elapsed.as_secs_f64());

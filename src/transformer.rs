@@ -1,6 +1,8 @@
 use crate::embedding::Embedding;
+use crate::feed_forward::FFNGradients;
 use crate::layer_norm::LayerNorm;
 use crate::linear::Linear;
+use crate::multi_head_attention::MHAGradients;
 use crate::optimizer::{Adam, clip_grad_norm};
 use crate::positional_encoding::positional_encoding;
 use crate::tensor::Tensor;
@@ -16,6 +18,106 @@ pub struct TransformerGradients {
 }
 
 impl TransformerGradients {
+    /// Create zero-initialized gradients matching the model structure.
+    pub fn zeros_like(model: &Transformer) -> Self {
+        let vocab_size = model.token_embedding.weight.shape[0];
+        let d_model = model.token_embedding.weight.shape[1];
+
+        let block_grads = model.blocks.iter().map(|block| {
+            let d_ff = block.ffn.linear1.weight.shape[0];
+            TransformerBlockGradients {
+                d_x: Tensor::zeros(vec![1, 1]), // unused placeholder
+                mha_grads: MHAGradients {
+                    d_x: Tensor::zeros(vec![1, 1]),
+                    d_wq_weight: Tensor::zeros(vec![d_model, d_model]),
+                    d_wq_bias: Tensor::zeros(vec![d_model]),
+                    d_wk_weight: Tensor::zeros(vec![d_model, d_model]),
+                    d_wk_bias: Tensor::zeros(vec![d_model]),
+                    d_wv_weight: Tensor::zeros(vec![d_model, d_model]),
+                    d_wv_bias: Tensor::zeros(vec![d_model]),
+                    d_wo_weight: Tensor::zeros(vec![d_model, d_model]),
+                    d_wo_bias: Tensor::zeros(vec![d_model]),
+                },
+                ffn_grads: FFNGradients {
+                    d_x: Tensor::zeros(vec![1, 1]),
+                    d_l1_weight: Tensor::zeros(vec![d_ff, d_model]),
+                    d_l1_bias: Tensor::zeros(vec![d_ff]),
+                    d_l2_weight: Tensor::zeros(vec![d_model, d_ff]),
+                    d_l2_bias: Tensor::zeros(vec![d_model]),
+                },
+                d_ln1_gamma: Tensor::zeros(vec![d_model]),
+                d_ln1_beta: Tensor::zeros(vec![d_model]),
+                d_ln2_gamma: Tensor::zeros(vec![d_model]),
+                d_ln2_beta: Tensor::zeros(vec![d_model]),
+            }
+        }).collect();
+
+        TransformerGradients {
+            d_embedding_weight: Tensor::zeros(vec![vocab_size, d_model]),
+            block_grads,
+            d_ln_final_gamma: Tensor::zeros(vec![d_model]),
+            d_ln_final_beta: Tensor::zeros(vec![d_model]),
+            d_lm_head_weight: Tensor::zeros(vec![vocab_size, d_model]),
+            d_lm_head_bias: Tensor::zeros(vec![vocab_size]),
+        }
+    }
+
+    /// Accumulate gradients from another set (in-place addition).
+    pub fn accumulate(&mut self, other: &TransformerGradients) {
+        self.d_embedding_weight.add_inplace(&other.d_embedding_weight);
+        self.d_ln_final_gamma.add_inplace(&other.d_ln_final_gamma);
+        self.d_ln_final_beta.add_inplace(&other.d_ln_final_beta);
+        self.d_lm_head_weight.add_inplace(&other.d_lm_head_weight);
+        self.d_lm_head_bias.add_inplace(&other.d_lm_head_bias);
+
+        for (sg, og) in self.block_grads.iter_mut().zip(other.block_grads.iter()) {
+            sg.d_ln1_gamma.add_inplace(&og.d_ln1_gamma);
+            sg.d_ln1_beta.add_inplace(&og.d_ln1_beta);
+            sg.d_ln2_gamma.add_inplace(&og.d_ln2_gamma);
+            sg.d_ln2_beta.add_inplace(&og.d_ln2_beta);
+            sg.mha_grads.d_wq_weight.add_inplace(&og.mha_grads.d_wq_weight);
+            sg.mha_grads.d_wq_bias.add_inplace(&og.mha_grads.d_wq_bias);
+            sg.mha_grads.d_wk_weight.add_inplace(&og.mha_grads.d_wk_weight);
+            sg.mha_grads.d_wk_bias.add_inplace(&og.mha_grads.d_wk_bias);
+            sg.mha_grads.d_wv_weight.add_inplace(&og.mha_grads.d_wv_weight);
+            sg.mha_grads.d_wv_bias.add_inplace(&og.mha_grads.d_wv_bias);
+            sg.mha_grads.d_wo_weight.add_inplace(&og.mha_grads.d_wo_weight);
+            sg.mha_grads.d_wo_bias.add_inplace(&og.mha_grads.d_wo_bias);
+            sg.ffn_grads.d_l1_weight.add_inplace(&og.ffn_grads.d_l1_weight);
+            sg.ffn_grads.d_l1_bias.add_inplace(&og.ffn_grads.d_l1_bias);
+            sg.ffn_grads.d_l2_weight.add_inplace(&og.ffn_grads.d_l2_weight);
+            sg.ffn_grads.d_l2_bias.add_inplace(&og.ffn_grads.d_l2_bias);
+        }
+    }
+
+    /// Scale all gradients by a scalar (for batch averaging).
+    pub fn scale(&mut self, s: f32) {
+        self.d_embedding_weight.scale_inplace(s);
+        self.d_ln_final_gamma.scale_inplace(s);
+        self.d_ln_final_beta.scale_inplace(s);
+        self.d_lm_head_weight.scale_inplace(s);
+        self.d_lm_head_bias.scale_inplace(s);
+
+        for bg in &mut self.block_grads {
+            bg.d_ln1_gamma.scale_inplace(s);
+            bg.d_ln1_beta.scale_inplace(s);
+            bg.d_ln2_gamma.scale_inplace(s);
+            bg.d_ln2_beta.scale_inplace(s);
+            bg.mha_grads.d_wq_weight.scale_inplace(s);
+            bg.mha_grads.d_wq_bias.scale_inplace(s);
+            bg.mha_grads.d_wk_weight.scale_inplace(s);
+            bg.mha_grads.d_wk_bias.scale_inplace(s);
+            bg.mha_grads.d_wv_weight.scale_inplace(s);
+            bg.mha_grads.d_wv_bias.scale_inplace(s);
+            bg.mha_grads.d_wo_weight.scale_inplace(s);
+            bg.mha_grads.d_wo_bias.scale_inplace(s);
+            bg.ffn_grads.d_l1_weight.scale_inplace(s);
+            bg.ffn_grads.d_l1_bias.scale_inplace(s);
+            bg.ffn_grads.d_l2_weight.scale_inplace(s);
+            bg.ffn_grads.d_l2_bias.scale_inplace(s);
+        }
+    }
+
     /// Clip all gradients by global L2 norm. Returns original norm.
     pub fn clip_norm(&mut self, max_norm: f32) -> f32 {
         let mut slices: Vec<&mut [f32]> = Vec::new();
