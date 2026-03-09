@@ -18,13 +18,32 @@ pub mod train;
 pub mod transformer;
 pub mod transformer_block;
 
+const MODEL_PATH: &str = "model.bin";
+const TOKENIZER_PATH: &str = "tokenizer.txt";
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let mode = args.get(1).map(|s| s.as_str()).unwrap_or("help");
+
+    match mode {
+        "train" => cmd_train(),
+        "generate" => cmd_generate(&args[2..]),
+        _ => {
+            eprintln!("Usage:");
+            eprintln!("  cargo run --release -- train");
+            eprintln!("  cargo run --release -- generate \"prompt text\"");
+            eprintln!("  cargo run --release -- generate \"prompt text\" [temperature]");
+        }
+    }
+}
+
+fn cmd_train() {
     use bpe_tokenizer::BpeTokenizer;
     use generate::generate;
     use train::train_with_batch;
     use transformer::Transformer;
 
-    // Load multiple works from Aozora Bunko
+    // Load corpus
     let files = [
         "data/kumo_no_ito.txt",
         "data/rashomon.txt",
@@ -39,12 +58,14 @@ fn main() {
         .join("\n");
     let corpus = corpus.trim();
 
+    // Train BPE tokenizer
     let bpe_vocab_size = 1000;
     let tokenizer = BpeTokenizer::train(corpus, bpe_vocab_size);
 
     println!("Corpus: {} chars ({} files)", corpus.chars().count(), files.len());
     println!("Vocab size: {} (BPE)", tokenizer.vocab_size());
 
+    // Model config
     let d_model = 128;
     let n_heads = 4;
     let d_ff = 512;
@@ -53,19 +74,12 @@ fn main() {
     let epochs = 30;
     let lr = 0.001;
     let dropout = 0.1;
-
     let batch_size = 8;
 
     println!("Model: d_model={}, n_heads={}, d_ff={}, n_layers={}, dropout={}", d_model, n_heads, d_ff, n_layers, dropout);
     println!("Training: seq_len={}, epochs={}, lr={}, batch_size={}", seq_len, epochs, lr, batch_size);
 
     let mut model = Transformer::rand_with_dropout(tokenizer.vocab_size(), d_model, n_heads, d_ff, n_layers, dropout);
-
-    // Generate before training
-    let prompt = "ある日";
-    println!("\n--- Before training ---");
-    let result = generate(&model, &tokenizer, prompt, 50, 0.01);
-    println!("\"{}\"", result);
 
     // Train
     println!("\n--- Training ---");
@@ -74,12 +88,16 @@ fn main() {
     let elapsed = start.elapsed();
     let n = losses.len();
     println!("Steps: {} ({:.1}s)", n, elapsed.as_secs_f64());
-    // Print loss at intervals
     for i in [0, n/4, n/2, 3*n/4, n-1] {
         println!("  step {:>4}: loss={:.4}", i, losses[i]);
     }
 
-    // Generate after training
+    // Save model and tokenizer
+    model.save(MODEL_PATH).expect("Failed to save model");
+    tokenizer.save(TOKENIZER_PATH).expect("Failed to save tokenizer");
+    println!("\nSaved model to {} and tokenizer to {}", MODEL_PATH, TOKENIZER_PATH);
+
+    // Generate samples
     println!("\n--- After training ---");
     for prompt in &["ある日の", "メロスは", "下人は", "蜘蛛の糸", "二人の若い紳士"] {
         let result = generate(&model, &tokenizer, prompt, 100, 0.8);
@@ -87,4 +105,24 @@ fn main() {
         println!("  → {}", result);
         println!();
     }
+}
+
+fn cmd_generate(args: &[String]) {
+    use bpe_tokenizer::BpeTokenizer;
+    use generate::generate;
+    use transformer::Transformer;
+
+    let prompt = args.first().map(|s| s.as_str()).unwrap_or("ある日");
+    let temperature: f32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0.8);
+
+    // Load model and tokenizer
+    let model = Transformer::load(MODEL_PATH)
+        .unwrap_or_else(|e| panic!("Failed to load {}: {}. Run 'train' first.", MODEL_PATH, e));
+    let tokenizer = BpeTokenizer::load(TOKENIZER_PATH)
+        .unwrap_or_else(|e| panic!("Failed to load {}: {}. Run 'train' first.", TOKENIZER_PATH, e));
+
+    println!("Loaded model from {} (vocab_size={})", MODEL_PATH, tokenizer.vocab_size());
+
+    let result = generate(&model, &tokenizer, prompt, 200, temperature);
+    println!("{}", result);
 }

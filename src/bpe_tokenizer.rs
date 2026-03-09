@@ -123,6 +123,60 @@ impl BpeTokenizer {
     }
 }
 
+impl BpeTokenizer {
+    /// Save tokenizer to a text file.
+    /// Format: one line per merge rule "token_a\ttoken_b", then "---", then vocabulary.
+    pub fn save(&self, path: &str) -> std::io::Result<()> {
+        use std::io::Write;
+        let mut file = std::fs::File::create(path)?;
+
+        // Write merge rules
+        for (a, b) in &self.merges {
+            writeln!(file, "{}\t{}", a, b)?;
+        }
+        writeln!(file, "---")?;
+
+        // Write vocabulary (id -> token)
+        for token in &self.id_to_token {
+            writeln!(file, "{}", token)?;
+        }
+        Ok(())
+    }
+
+    /// Load tokenizer from a text file.
+    pub fn load(path: &str) -> std::io::Result<Self> {
+        let content = std::fs::read_to_string(path)?;
+        let mut lines = content.lines();
+
+        // Read merge rules until "---"
+        let mut merges = Vec::new();
+        for line in lines.by_ref() {
+            if line == "---" {
+                break;
+            }
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() == 2 {
+                merges.push((parts[0].to_string(), parts[1].to_string()));
+            }
+        }
+
+        // Read vocabulary
+        let mut id_to_token = Vec::new();
+        let mut token_to_id = HashMap::new();
+        for line in lines {
+            let id = id_to_token.len();
+            token_to_id.insert(line.to_string(), id);
+            id_to_token.push(line.to_string());
+        }
+
+        Ok(BpeTokenizer {
+            merges,
+            token_to_id,
+            id_to_token,
+        })
+    }
+}
+
 impl TokenizerTrait for BpeTokenizer {
     fn vocab_size(&self) -> usize { self.vocab_size() }
     fn encode(&self, text: &str) -> Vec<usize> { self.encode(text) }
@@ -229,5 +283,37 @@ mod tests {
         let ids = tok.encode("ました");
         // Should be fewer than 3 tokens (ま、し、た)
         assert!(ids.len() < 3, "expected merged tokens, got {} tokens", ids.len());
+    }
+
+    #[test]
+    fn test_save_load_roundtrip() {
+        let corpus = "走れメロス走れメロス走れメロス";
+        let tok = BpeTokenizer::train(corpus, 15);
+
+        let path = "/tmp/test_bpe_tokenizer.txt";
+        tok.save(path).unwrap();
+
+        let loaded = BpeTokenizer::load(path).unwrap();
+
+        // Verify same vocab size
+        assert_eq!(tok.vocab_size(), loaded.vocab_size());
+
+        // Verify same merges
+        assert_eq!(tok.merges.len(), loaded.merges.len());
+        for (a, b) in tok.merges.iter().zip(loaded.merges.iter()) {
+            assert_eq!(a, b);
+        }
+
+        // Verify encode produces same results
+        let text = "走れメロス";
+        let ids_orig = tok.encode(text);
+        let ids_loaded = loaded.encode(text);
+        assert_eq!(ids_orig, ids_loaded);
+
+        // Verify decode roundtrip
+        let decoded = loaded.decode(&ids_loaded);
+        assert_eq!(decoded, text);
+
+        std::fs::remove_file(path).ok();
     }
 }

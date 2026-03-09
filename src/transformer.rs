@@ -363,6 +363,122 @@ impl Transformer {
         adam.update(idx, &mut self.lm_head.weight.data, &grads.d_lm_head_weight.data); idx += 1;
         adam.update(idx, &mut self.lm_head.bias.data, &grads.d_lm_head_bias.data);
     }
+
+    /// Collect all parameter data into a flat Vec in deterministic order.
+    fn collect_params(&self) -> Vec<f32> {
+        let mut params = Vec::new();
+        params.extend_from_slice(&self.token_embedding.weight.data);
+        for block in &self.blocks {
+            params.extend_from_slice(&block.ln1.gamma.data);
+            params.extend_from_slice(&block.ln1.beta.data);
+            params.extend_from_slice(&block.mha.wq.weight.data);
+            params.extend_from_slice(&block.mha.wq.bias.data);
+            params.extend_from_slice(&block.mha.wk.weight.data);
+            params.extend_from_slice(&block.mha.wk.bias.data);
+            params.extend_from_slice(&block.mha.wv.weight.data);
+            params.extend_from_slice(&block.mha.wv.bias.data);
+            params.extend_from_slice(&block.mha.wo.weight.data);
+            params.extend_from_slice(&block.mha.wo.bias.data);
+            params.extend_from_slice(&block.ln2.gamma.data);
+            params.extend_from_slice(&block.ln2.beta.data);
+            params.extend_from_slice(&block.ffn.linear1.weight.data);
+            params.extend_from_slice(&block.ffn.linear1.bias.data);
+            params.extend_from_slice(&block.ffn.linear2.weight.data);
+            params.extend_from_slice(&block.ffn.linear2.bias.data);
+        }
+        params.extend_from_slice(&self.ln_final.gamma.data);
+        params.extend_from_slice(&self.ln_final.beta.data);
+        params.extend_from_slice(&self.lm_head.weight.data);
+        params.extend_from_slice(&self.lm_head.bias.data);
+        params
+    }
+
+    /// Load parameter data from a flat slice in the same order as collect_params.
+    fn load_params(&mut self, data: &[f32]) {
+        let mut offset = 0;
+        let mut read = |dst: &mut [f32]| {
+            dst.copy_from_slice(&data[offset..offset + dst.len()]);
+            offset += dst.len();
+        };
+        read(&mut self.token_embedding.weight.data);
+        for block in &mut self.blocks {
+            read(&mut block.ln1.gamma.data);
+            read(&mut block.ln1.beta.data);
+            read(&mut block.mha.wq.weight.data);
+            read(&mut block.mha.wq.bias.data);
+            read(&mut block.mha.wk.weight.data);
+            read(&mut block.mha.wk.bias.data);
+            read(&mut block.mha.wv.weight.data);
+            read(&mut block.mha.wv.bias.data);
+            read(&mut block.mha.wo.weight.data);
+            read(&mut block.mha.wo.bias.data);
+            read(&mut block.ln2.gamma.data);
+            read(&mut block.ln2.beta.data);
+            read(&mut block.ffn.linear1.weight.data);
+            read(&mut block.ffn.linear1.bias.data);
+            read(&mut block.ffn.linear2.weight.data);
+            read(&mut block.ffn.linear2.bias.data);
+        }
+        read(&mut self.ln_final.gamma.data);
+        read(&mut self.ln_final.beta.data);
+        read(&mut self.lm_head.weight.data);
+        read(&mut self.lm_head.bias.data);
+    }
+
+    /// Save model to a binary file.
+    /// Format: [vocab_size, d_model, n_heads, d_ff, n_layers] as u32, then f32 params.
+    pub fn save(&self, path: &str) -> std::io::Result<()> {
+        use std::io::Write;
+        let vocab_size = self.token_embedding.weight.shape[0] as u32;
+        let d_model = self.token_embedding.weight.shape[1] as u32;
+        let n_heads = self.blocks[0].mha.n_heads as u32;
+        let d_ff = self.blocks[0].ffn.linear1.weight.shape[0] as u32;
+        let n_layers = self.blocks.len() as u32;
+
+        let mut file = std::fs::File::create(path)?;
+        // Write header
+        for v in &[vocab_size, d_model, n_heads, d_ff, n_layers] {
+            file.write_all(&v.to_le_bytes())?;
+        }
+        // Write params
+        let params = self.collect_params();
+        for v in &params {
+            file.write_all(&v.to_le_bytes())?;
+        }
+        Ok(())
+    }
+
+    /// Load model from a binary file.
+    pub fn load(path: &str) -> std::io::Result<Self> {
+        use std::io::Read;
+        let mut file = std::fs::File::open(path)?;
+
+        // Read header
+        let mut buf = [0u8; 4];
+        let mut read_u32 = |f: &mut std::fs::File| -> std::io::Result<u32> {
+            f.read_exact(&mut buf)?;
+            Ok(u32::from_le_bytes(buf))
+        };
+        let vocab_size = read_u32(&mut file)? as usize;
+        let d_model = read_u32(&mut file)? as usize;
+        let n_heads = read_u32(&mut file)? as usize;
+        let d_ff = read_u32(&mut file)? as usize;
+        let n_layers = read_u32(&mut file)? as usize;
+
+        // Create model with correct structure
+        let mut model = Self::rand(vocab_size, d_model, n_heads, d_ff, n_layers);
+
+        // Read params
+        let mut raw = Vec::new();
+        file.read_to_end(&mut raw)?;
+        let params: Vec<f32> = raw
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+
+        model.load_params(&params);
+        Ok(model)
+    }
 }
 
 #[cfg(test)]
@@ -530,5 +646,36 @@ mod tests {
 
         let lm_sum: f32 = grads.d_lm_head_weight.data.iter().map(|v| v.abs()).sum();
         assert!(lm_sum > 0.0, "d_lm_head_weight should not be all zeros");
+    }
+
+    #[test]
+    fn test_save_load_roundtrip() {
+        let model = make_tiny_model();
+        let path = "/tmp/test_model.bin";
+
+        model.save(path).unwrap();
+        let loaded = Transformer::load(path).unwrap();
+
+        // Check structure matches
+        assert_eq!(
+            model.token_embedding.weight.shape,
+            loaded.token_embedding.weight.shape
+        );
+        assert_eq!(model.blocks.len(), loaded.blocks.len());
+
+        // Check params match
+        let orig_params = model.collect_params();
+        let loaded_params = loaded.collect_params();
+        assert_eq!(orig_params.len(), loaded_params.len());
+        for (a, b) in orig_params.iter().zip(loaded_params.iter()) {
+            assert_eq!(a, b);
+        }
+
+        // Check forward produces same output
+        let out1 = model.forward(&[0, 1, 2]);
+        let out2 = loaded.forward(&[0, 1, 2]);
+        assert_eq!(out1.data, out2.data);
+
+        std::fs::remove_file(path).ok();
     }
 }
