@@ -1,6 +1,7 @@
 use crate::embedding::Embedding;
 use crate::layer_norm::LayerNorm;
 use crate::linear::Linear;
+use crate::optimizer::Adam;
 use crate::positional_encoding::positional_encoding;
 use crate::tensor::Tensor;
 use crate::transformer_block::{TransformerBlock, TransformerBlockGradients};
@@ -129,6 +130,84 @@ impl Transformer {
             d_lm_head_weight,
             d_lm_head_bias,
         }
+    }
+
+    /// Return sizes of all parameter groups (for Adam initialization).
+    pub fn param_sizes(&self) -> Vec<usize> {
+        let mut sizes = Vec::new();
+        // Embedding
+        sizes.push(self.token_embedding.weight.data.len());
+        // Blocks
+        for block in &self.blocks {
+            // LN1: gamma, beta
+            sizes.push(block.ln1.gamma.data.len());
+            sizes.push(block.ln1.beta.data.len());
+            // MHA: wq, wk, wv, wo (weight + bias each)
+            sizes.push(block.mha.wq.weight.data.len());
+            sizes.push(block.mha.wq.bias.data.len());
+            sizes.push(block.mha.wk.weight.data.len());
+            sizes.push(block.mha.wk.bias.data.len());
+            sizes.push(block.mha.wv.weight.data.len());
+            sizes.push(block.mha.wv.bias.data.len());
+            sizes.push(block.mha.wo.weight.data.len());
+            sizes.push(block.mha.wo.bias.data.len());
+            // LN2: gamma, beta
+            sizes.push(block.ln2.gamma.data.len());
+            sizes.push(block.ln2.beta.data.len());
+            // FFN: linear1, linear2 (weight + bias each)
+            sizes.push(block.ffn.linear1.weight.data.len());
+            sizes.push(block.ffn.linear1.bias.data.len());
+            sizes.push(block.ffn.linear2.weight.data.len());
+            sizes.push(block.ffn.linear2.bias.data.len());
+        }
+        // Final LN: gamma, beta
+        sizes.push(self.ln_final.gamma.data.len());
+        sizes.push(self.ln_final.beta.data.len());
+        // LM Head: weight, bias
+        sizes.push(self.lm_head.weight.data.len());
+        sizes.push(self.lm_head.bias.data.len());
+        sizes
+    }
+
+    /// Apply gradients using Adam optimizer.
+    pub fn apply_gradients(&mut self, grads: &TransformerGradients, adam: &mut Adam) {
+        adam.begin_step();
+        let mut idx = 0;
+
+        // Embedding
+        adam.update(idx, &mut self.token_embedding.weight.data, &grads.d_embedding_weight.data);
+        idx += 1;
+
+        // Blocks
+        for (block, bg) in self.blocks.iter_mut().zip(grads.block_grads.iter()) {
+            // LN1
+            adam.update(idx, &mut block.ln1.gamma.data, &bg.d_ln1_gamma.data); idx += 1;
+            adam.update(idx, &mut block.ln1.beta.data, &bg.d_ln1_beta.data); idx += 1;
+            // MHA
+            adam.update(idx, &mut block.mha.wq.weight.data, &bg.mha_grads.d_wq_weight.data); idx += 1;
+            adam.update(idx, &mut block.mha.wq.bias.data, &bg.mha_grads.d_wq_bias.data); idx += 1;
+            adam.update(idx, &mut block.mha.wk.weight.data, &bg.mha_grads.d_wk_weight.data); idx += 1;
+            adam.update(idx, &mut block.mha.wk.bias.data, &bg.mha_grads.d_wk_bias.data); idx += 1;
+            adam.update(idx, &mut block.mha.wv.weight.data, &bg.mha_grads.d_wv_weight.data); idx += 1;
+            adam.update(idx, &mut block.mha.wv.bias.data, &bg.mha_grads.d_wv_bias.data); idx += 1;
+            adam.update(idx, &mut block.mha.wo.weight.data, &bg.mha_grads.d_wo_weight.data); idx += 1;
+            adam.update(idx, &mut block.mha.wo.bias.data, &bg.mha_grads.d_wo_bias.data); idx += 1;
+            // LN2
+            adam.update(idx, &mut block.ln2.gamma.data, &bg.d_ln2_gamma.data); idx += 1;
+            adam.update(idx, &mut block.ln2.beta.data, &bg.d_ln2_beta.data); idx += 1;
+            // FFN
+            adam.update(idx, &mut block.ffn.linear1.weight.data, &bg.ffn_grads.d_l1_weight.data); idx += 1;
+            adam.update(idx, &mut block.ffn.linear1.bias.data, &bg.ffn_grads.d_l1_bias.data); idx += 1;
+            adam.update(idx, &mut block.ffn.linear2.weight.data, &bg.ffn_grads.d_l2_weight.data); idx += 1;
+            adam.update(idx, &mut block.ffn.linear2.bias.data, &bg.ffn_grads.d_l2_bias.data); idx += 1;
+        }
+
+        // Final LN
+        adam.update(idx, &mut self.ln_final.gamma.data, &grads.d_ln_final_gamma.data); idx += 1;
+        adam.update(idx, &mut self.ln_final.beta.data, &grads.d_ln_final_beta.data); idx += 1;
+        // LM Head
+        adam.update(idx, &mut self.lm_head.weight.data, &grads.d_lm_head_weight.data); idx += 1;
+        adam.update(idx, &mut self.lm_head.bias.data, &grads.d_lm_head_bias.data);
     }
 }
 

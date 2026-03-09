@@ -7,6 +7,7 @@ pub mod layer_norm;
 pub mod loss;
 pub mod linear;
 pub mod multi_head_attention;
+pub mod optimizer;
 pub mod positional_encoding;
 pub mod softmax;
 pub mod tensor;
