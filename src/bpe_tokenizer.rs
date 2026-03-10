@@ -124,21 +124,52 @@ impl BpeTokenizer {
 }
 
 impl BpeTokenizer {
+    /// Escape special characters for text-based save format.
+    fn escape(s: &str) -> String {
+        s.replace('\\', "\\\\")
+            .replace('\n', "\\n")
+            .replace('\t', "\\t")
+    }
+
+    /// Unescape special characters when loading.
+    fn unescape(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => result.push('\n'),
+                    Some('t') => result.push('\t'),
+                    Some('\\') => result.push('\\'),
+                    Some(other) => {
+                        result.push('\\');
+                        result.push(other);
+                    }
+                    None => result.push('\\'),
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
+    }
+
     /// Save tokenizer to a text file.
     /// Format: one line per merge rule "token_a\ttoken_b", then "---", then vocabulary.
+    /// Special characters (\n, \t, \\) are escaped.
     pub fn save(&self, path: &str) -> std::io::Result<()> {
         use std::io::Write;
         let mut file = std::fs::File::create(path)?;
 
-        // Write merge rules
+        // Write merge rules (escaped)
         for (a, b) in &self.merges {
-            writeln!(file, "{}\t{}", a, b)?;
+            writeln!(file, "{}\t{}", Self::escape(a), Self::escape(b))?;
         }
         writeln!(file, "---")?;
 
-        // Write vocabulary (id -> token)
+        // Write vocabulary (id -> token, escaped)
         for token in &self.id_to_token {
-            writeln!(file, "{}", token)?;
+            writeln!(file, "{}", Self::escape(token))?;
         }
         Ok(())
     }
@@ -156,17 +187,18 @@ impl BpeTokenizer {
             }
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() == 2 {
-                merges.push((parts[0].to_string(), parts[1].to_string()));
+                merges.push((Self::unescape(parts[0]), Self::unescape(parts[1])));
             }
         }
 
-        // Read vocabulary
+        // Read vocabulary (unescape each token)
         let mut id_to_token = Vec::new();
         let mut token_to_id = HashMap::new();
         for line in lines {
+            let token = Self::unescape(line);
             let id = id_to_token.len();
-            token_to_id.insert(line.to_string(), id);
-            id_to_token.push(line.to_string());
+            token_to_id.insert(token.clone(), id);
+            id_to_token.push(token);
         }
 
         Ok(BpeTokenizer {
@@ -313,6 +345,33 @@ mod tests {
         // Verify decode roundtrip
         let decoded = loaded.decode(&ids_loaded);
         assert_eq!(decoded, text);
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn test_save_load_with_newlines() {
+        // Corpus with newlines to ensure they are handled correctly
+        let corpus = "あ\nい\nあ\nい\nあ\nい\n";
+        let tok = BpeTokenizer::train(corpus, 10);
+
+        // Verify newline is in vocabulary
+        assert!(tok.token_to_id.contains_key("\n"), "newline should be in vocab");
+
+        let path = "/tmp/test_bpe_newline.txt";
+        tok.save(path).unwrap();
+        let loaded = BpeTokenizer::load(path).unwrap();
+
+        // Vocab size must match exactly
+        assert_eq!(tok.vocab_size(), loaded.vocab_size(),
+            "vocab_size mismatch: original {} vs loaded {}", tok.vocab_size(), loaded.vocab_size());
+
+        // Encode/decode roundtrip with newlines
+        let text = "あ\nい";
+        let ids_orig = tok.encode(text);
+        let ids_loaded = loaded.encode(text);
+        assert_eq!(ids_orig, ids_loaded);
+        assert_eq!(loaded.decode(&ids_loaded), text);
 
         std::fs::remove_file(path).ok();
     }
