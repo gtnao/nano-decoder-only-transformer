@@ -47,10 +47,10 @@ impl BpeTokenizer {
                 break;
             }
 
-            // Find most frequent pair (deterministic: break ties by lexicographic order)
+            // Find most frequent pair
             let best_pair = pair_counts
                 .iter()
-                .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+                .max_by_key(|&(_, count)| count)
                 .unwrap()
                 .0
                 .clone();

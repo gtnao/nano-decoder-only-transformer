@@ -49,49 +49,12 @@ fn main() {
             cmd_train(config_path);
         }
         "generate" => cmd_generate(&args[2..]),
-        "retokenize" => {
-            let config_path = args.get(2).map(|s| s.as_str()).unwrap_or(DEFAULT_CONFIG_PATH);
-            cmd_retokenize(config_path);
-        }
         _ => {
             eprintln!("Usage:");
             eprintln!("  cargo run --release -- train [config_file]");
             eprintln!("  cargo run --release -- generate \"prompt text\" [temperature]");
-            eprintln!("  cargo run --release -- retokenize [config_file]");
         }
     }
-}
-
-/// Load corpus from data_dir with optional per-file truncation.
-fn load_corpus(data_dir: &str, max_chars: usize) -> (String, usize) {
-    let mut files: Vec<_> = std::fs::read_dir(data_dir)
-        .unwrap_or_else(|e| panic!("Failed to read {}: {}", data_dir, e))
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            if path.extension().map(|e| e == "txt").unwrap_or(false) {
-                Some(path)
-            } else {
-                None
-            }
-        })
-        .collect();
-    files.sort();
-    let n_files = files.len();
-
-    let corpus: String = files
-        .iter()
-        .map(|f| {
-            let text = std::fs::read_to_string(f).unwrap_or_else(|_| panic!("Failed to read {:?}", f));
-            if max_chars > 0 && text.chars().count() > max_chars {
-                text.chars().take(max_chars).collect::<String>()
-            } else {
-                text
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let corpus = corpus.trim().to_string();
-    (corpus, n_files)
 }
 
 fn cmd_train(config_path: &str) {
@@ -120,12 +83,39 @@ fn cmd_train(config_path: &str) {
 
     println!("Config: {}", config_path);
 
-    let (corpus, n_files) = load_corpus(&data_dir, max_chars);
+    // Load corpus: all .txt files in data_dir
+    let mut files: Vec<_> = std::fs::read_dir(&data_dir)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", data_dir, e))
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            if path.extension().map(|e| e == "txt").unwrap_or(false) {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+    files.sort();
+
+    let corpus: String = files
+        .iter()
+        .map(|f| {
+            let text = std::fs::read_to_string(f).unwrap_or_else(|_| panic!("Failed to read {:?}", f));
+            if max_chars > 0 && text.chars().count() > max_chars {
+                // Truncate to max_chars at a char boundary
+                text.chars().take(max_chars).collect::<String>()
+            } else {
+                text
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let corpus = corpus.trim();
 
     // Train BPE tokenizer
-    let tokenizer = BpeTokenizer::train(&corpus, bpe_vocab_size);
+    let tokenizer = BpeTokenizer::train(corpus, bpe_vocab_size);
 
-    println!("Corpus: {} chars ({} files)", corpus.chars().count(), n_files);
+    println!("Corpus: {} chars ({} files)", corpus.chars().count(), files.len());
     println!("Vocab size: {} (BPE)", tokenizer.vocab_size());
     println!("Model: d_model={}, n_heads={}, d_ff={}, n_layers={}, dropout={}", d_model, n_heads, d_ff, n_layers, dropout);
     println!("Training: seq_len={}, epochs={}, lr={}, batch_size={}", seq_len, epochs, lr, batch_size);
@@ -135,7 +125,7 @@ fn cmd_train(config_path: &str) {
     // Train
     println!("\n--- Training ---");
     let start = std::time::Instant::now();
-    let losses = train_with_batch(&mut model, &tokenizer, &corpus, seq_len, epochs, lr, batch_size);
+    let losses = train_with_batch(&mut model, &tokenizer, corpus, seq_len, epochs, lr, batch_size);
     let elapsed = start.elapsed();
     let n = losses.len();
     println!("Steps: {} ({:.1}s)", n, elapsed.as_secs_f64());
@@ -156,47 +146,6 @@ fn cmd_train(config_path: &str) {
         println!("  → {}", result);
         println!();
     }
-}
-
-fn cmd_retokenize(config_path: &str) {
-    use bpe_tokenizer::BpeTokenizer;
-    use transformer::Transformer;
-
-    let cfg = load_config(config_path);
-    let get = |key: &str, default: &str| -> String {
-        cfg.get(key).cloned().unwrap_or_else(|| default.to_string())
-    };
-
-    let bpe_vocab_size: usize = get("bpe_vocab_size", "1000").parse().unwrap();
-    let data_dir = get("data_dir", "data");
-    let max_chars: usize = get("max_chars_per_file", "0").parse().unwrap();
-
-    // Load model to verify vocab_size compatibility
-    let model = Transformer::load(MODEL_PATH)
-        .unwrap_or_else(|e| panic!("Failed to load {}: {}. Run 'train' first.", MODEL_PATH, e));
-    let model_vocab = model.token_embedding.weight.shape[0];
-
-    let (corpus, n_files) = load_corpus(&data_dir, max_chars);
-
-    // Retrain tokenizer from corpus
-    let tokenizer = BpeTokenizer::train(&corpus, bpe_vocab_size);
-
-    println!("Corpus: {} chars ({} files)", corpus.chars().count(), n_files);
-    println!("Model vocab_size: {}", model_vocab);
-    println!("Tokenizer vocab_size: {}", tokenizer.vocab_size());
-
-    if tokenizer.vocab_size() != model_vocab {
-        eprintln!(
-            "WARNING: vocab_size mismatch! Model expects {} but tokenizer has {}.",
-            model_vocab, tokenizer.vocab_size()
-        );
-        eprintln!("The model may not work correctly. Consider retraining.");
-    } else {
-        println!("vocab_size matches.");
-    }
-
-    tokenizer.save(TOKENIZER_PATH).expect("Failed to save tokenizer");
-    println!("Saved tokenizer to {}", TOKENIZER_PATH);
 }
 
 fn cmd_generate(args: &[String]) {
