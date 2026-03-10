@@ -3,7 +3,18 @@ name = "nano-decoder-only-transformer"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+accelerate = ["cblas", "blas-src"]
+
 [dependencies]
 matrixmultiply = "0.3.10"
 rand = "0.10.0"
 rayon = "1.11.0"
+cblas = { version = "0.5", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+blas-src = { version = "0.14", features = ["accelerate"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+blas-src = { version = "0.14", features = ["openblas"], optional = true }

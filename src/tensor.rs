@@ -105,7 +105,9 @@ impl Tensor {
         Tensor::new(data, vec![cols, rows])
     }
 
-    // 2D matrix multiplication (optimized via matrixmultiply crate)
+    // 2D matrix multiplication
+    // With "accelerate" feature: uses Apple Accelerate (AMX) via cblas
+    // Without: uses matrixmultiply crate
     pub fn matmul(&self, other: &Tensor) -> Tensor {
         assert_eq!(self.shape.len(), 2, "matmul requires 2D tensor");
         assert_eq!(other.shape.len(), 2, "matmul requires 2D tensor");
@@ -113,6 +115,23 @@ impl Tensor {
         let (k2, n) = (other.shape[0], other.shape[1]);
         assert_eq!(k1, k2, "matmul inner dimensions mismatch: {} vs {}", k1, k2);
         let mut data = vec![0.0_f32; m * n];
+
+        #[cfg(feature = "accelerate")]
+        unsafe {
+            cblas::sgemm(
+                cblas::Layout::RowMajor,
+                cblas::Transpose::None,
+                cblas::Transpose::None,
+                m as i32, n as i32, k1 as i32,
+                1.0,
+                &self.data, k1 as i32,
+                &other.data, n as i32,
+                0.0,
+                &mut data, n as i32,
+            );
+        }
+
+        #[cfg(not(feature = "accelerate"))]
         unsafe {
             matrixmultiply::sgemm(
                 m, k1, n,
@@ -123,6 +142,7 @@ impl Tensor {
                 data.as_mut_ptr(), n as isize, 1,
             );
         }
+
         Tensor::new(data, vec![m, n])
     }
 }

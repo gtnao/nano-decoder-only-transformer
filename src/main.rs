@@ -1,3 +1,6 @@
+#[cfg(feature = "accelerate")]
+extern crate blas_src;
+
 pub mod activation;
 pub mod attention;
 pub mod bpe_tokenizer;
